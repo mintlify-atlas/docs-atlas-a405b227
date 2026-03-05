@@ -1,0 +1,336 @@
+---
+title: 'Styling System'
+description: 'Tailwind CSS configuration and design tokens for PixelTech'
+icon: 'palette'
+---
+
+## Overview
+
+PixelTech uses **Tailwind CSS** for utility-first styling with custom brand colors and design tokens. The configuration is defined in `tailwind.config.js`.
+
+## Tailwind Configuration
+
+```javascript tailwind.config.js
+module.exports = {
+  content: ["./public/**/*.{html,js}"],
+  theme: {
+    extend: {
+      colors: {
+        'brand-primary': '#2563EB',
+        'brand-dark': '#1E293B',
+      }
+    },
+  },
+  plugins: [],
+}
+```
+
+<Warning>
+The actual brand colors used in the codebase differ from the config file. The live brand color is **#00AEC7** (cyan).
+</Warning>
+
+## Brand Colors
+
+### Primary Palette
+
+<CardGroup cols={2}>
+  <Card title="Brand Cyan" icon="droplet">
+    **Hex**: `#00AEC7`  
+    **Usage**: Primary CTAs, links, highlights  
+    **Class**: `bg-brand-cyan`, `text-brand-cyan`, `border-brand-cyan`
+  </Card>
+  <Card title="Brand Black" icon="moon">
+    **Hex**: `#171717` (Tailwind gray-900)  
+    **Usage**: Headers, dark backgrounds, text  
+    **Class**: `bg-brand-black`, `text-brand-black`
+  </Card>
+</CardGroup>
+
+### Semantic Colors
+
+```css
+/* Used throughout the application */
+.bg-brand-red { background-color: #DC2626; }    /* Discounts, errors */
+.bg-brand-cyan { background-color: #00AEC7; }   /* Primary actions */
+.bg-brand-black { background-color: #171717; }  /* Dark UI elements */
+.bg-slate-900 { background-color: #0f172a; }    /* Secondary dark */
+.bg-slate-50 { background-color: #f8fafc; }     /* Light backgrounds */
+```
+
+## Typography
+
+### Font Family
+
+The platform uses system fonts with a sans-serif fallback:
+
+```css
+font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+```
+
+### Font Weights
+
+<ParamField body="Font Classes" type="classes">
+  - `font-normal` (400) - Body text
+  - `font-bold` (700) - Emphasized text
+  - `font-black` (900) - Headings, CTAs
+</ParamField>
+
+### Text Sizes
+
+```html
+<!-- Product Names -->
+<h3 class="text-sm md:text-lg font-black uppercase tracking-tight">
+
+<!-- Prices -->
+<span class="text-xl md:text-2xl font-black text-brand-cyan">
+
+<!-- Labels -->
+<span class="text-[8px] md:text-[10px] font-black uppercase tracking-widest">
+
+<!-- Body Text -->
+<p class="text-sm md:text-base text-gray-600">
+```
+
+## Spacing System
+
+Tailwind's default spacing scale (1 unit = 0.25rem = 4px):
+
+```html
+<!-- Padding -->
+<div class="p-4 md:p-6 lg:p-8">          <!-- 16px / 24px / 32px -->
+
+<!-- Margin -->
+<div class="mb-2 md:mb-4">                <!-- 8px / 16px -->
+
+<!-- Gap (Flexbox/Grid) -->
+<div class="flex gap-3 md:gap-6">         <!-- 12px / 24px -->
+```
+
+## Border Radius
+
+Custom rounded corners for brand consistency:
+
+<CodeGroup>
+```html Buttons
+<button class="rounded-xl">      <!-- 12px -->
+<button class="rounded-2xl">     <!-- 16px -->
+<button class="rounded-full">    <!-- 9999px (pill shape) -->
+```
+
+```html Cards
+<div class="rounded-2xl">        <!-- 16px - Standard cards -->
+<div class="rounded-[2rem]">     <!-- 32px - Modal containers -->
+```
+</CodeGroup>
+
+## Shadows
+
+Elevation system using Tailwind shadows:
+
+```html
+<!-- Light elevation -->
+<div class="shadow-sm">            <!-- Subtle cards -->
+
+<!-- Medium elevation -->
+<div class="shadow-lg">            <!-- Buttons, modals -->
+
+<!-- Heavy elevation -->
+<div class="shadow-2xl">           <!-- Drawers, overlays -->
+
+<!-- Custom shadow -->
+<div class="shadow-[0_10px_30px_rgba(0,0,0,0.15)]">  <!-- Custom depth -->
+```
+
+## Responsive Design
+
+Mobile-first breakpoints:
+
+<ResponseField name="Breakpoints" type="object">
+  <Expandable title="Tailwind Breakpoints">
+    - `sm`: 640px (tablets)
+    - `md`: 768px (small laptops)
+    - `lg`: 1024px (desktops)
+    - `xl`: 1280px (large screens)
+  </Expandable>
+</ResponseField>
+
+### Usage Examples
+
+```html
+<!-- Hide on mobile, show on desktop -->
+<div class="hidden lg:block">Desktop Only</div>
+
+<!-- Different sizes per breakpoint -->
+<img class="h-12 md:h-16 lg:h-20">
+
+<!-- Responsive grid -->
+<div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+```
+
+## Component Patterns
+
+### Primary Button
+
+```html
+<button class="bg-brand-cyan text-brand-black font-black py-4 px-6 rounded-2xl 
+               uppercase text-xs tracking-widest shadow-lg 
+               hover:-translate-y-1 hover:bg-cyan-400 
+               active:scale-95 transition-all duration-300">
+  Agregar al Carrito
+</button>
+```
+
+### Card Component
+
+```html
+<div class="bg-white rounded-2xl border border-gray-100 p-6 
+            hover:shadow-xl hover:border-brand-cyan hover:-translate-y-1 
+            transition-all duration-300 group">
+  <img class="group-hover:scale-110 transition-transform duration-500">
+  <h3 class="text-brand-black group-hover:text-brand-cyan transition-colors">
+</div>
+```
+
+### Badge/Label
+
+```html
+<span class="bg-brand-red text-white text-[8px] font-black px-2 py-1 
+             rounded-md uppercase tracking-wider">
+  -20%
+</span>
+```
+
+## Custom Utilities
+
+Custom CSS classes defined in component styles:
+
+```css
+/* Hide scrollbars */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* Marquee animation */
+@keyframes marquee {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.animate-marquee { animation: marquee 60s linear infinite; }
+
+/* Smooth transitions */
+.smooth-drawer {
+  transition-property: transform, opacity, visibility;
+  transition-duration: 500ms;
+  transition-timing-function: cubic-bezier(0.19, 1, 0.22, 1);
+}
+```
+
+## Dark Mode Support
+
+<Info>
+Currently, dark mode is not implemented. The platform uses a dark header with light content areas.
+</Info>
+
+Future dark mode implementation:
+
+```html
+<div class="bg-white dark:bg-slate-900 text-black dark:text-white">
+```
+
+## Accessibility
+
+### Focus States
+
+```html
+<button class="focus:ring-4 focus:ring-brand-cyan/20 focus:outline-none">
+  Accessible Button
+</button>
+
+<input class="focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5">
+```
+
+### Color Contrast
+
+All text meets WCAG AA standards:
+- White text on `bg-brand-black` (#171717) ✓
+- Black text on `bg-brand-cyan` (#00AEC7) ✓
+- Gray text (#64748b) on white backgrounds ✓
+
+## Animations
+
+### Transitions
+
+```html
+<!-- Hover effects -->
+<div class="transition-all duration-300 hover:-translate-y-1 hover:shadow-xl">
+
+<!-- Color changes -->
+<span class="transition-colors duration-200 hover:text-brand-cyan">
+
+<!-- Transform animations -->
+<img class="transition-transform duration-500 hover:scale-110">
+```
+
+### Keyframe Animations
+
+```html
+<!-- Pulse effect -->
+<div class="animate-pulse">Loading...</div>
+
+<!-- Bounce -->
+<i class="animate-bounce">⬇️</i>
+
+<!-- Spin -->
+<i class="fa-spin fa-circle-notch"></i>
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Mobile-First Approach">
+    Start with mobile styles, then add `md:`, `lg:` prefixes for larger screens
+  </Step>
+  <Step title="Use Brand Colors">
+    Stick to `brand-cyan`, `brand-black`, and semantic colors for consistency
+  </Step>
+  <Step title="Consistent Spacing">
+    Use multiples of 4 (p-4, gap-6, mb-8) for harmonious layouts
+  </Step>
+  <Step title="Transition Everything">
+    Add `transition-all duration-300` to interactive elements
+  </Step>
+  <Step title="Group Hover States">
+    Use `group` and `group-hover:` for coordinated card animations
+  </Step>
+</Steps>
+
+## Design Tokens Reference
+
+```javascript
+const designTokens = {
+  colors: {
+    primary: '#00AEC7',      // Brand Cyan
+    dark: '#171717',         // Brand Black
+    danger: '#DC2626',       // Red for errors/discounts
+    success: '#16A34A',      // Green for success states
+  },
+  spacing: {
+    section: '2rem',         // p-8 (32px)
+    card: '1.5rem',          // p-6 (24px)
+    element: '1rem',         // p-4 (16px)
+  },
+  borderRadius: {
+    button: '1rem',          // rounded-2xl
+    card: '1rem',            // rounded-2xl
+    modal: '2rem',           // rounded-[2rem]
+  },
+  typography: {
+    heading: '900',          // font-black
+    body: '400',             // font-normal
+    emphasis: '700',         // font-bold
+  }
+};
+```
+
+## Related Documentation
+
+- [Frontend Components](/frontend/components)
+- [SmartProductSync System](/frontend/smart-sync)

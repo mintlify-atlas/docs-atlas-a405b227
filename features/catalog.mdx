@@ -1,0 +1,292 @@
+---
+title: Product Catalog
+description: Real-time product browsing with smart caching and instant search
+---
+
+## Overview
+
+PixelTech's product catalog delivers a lightning-fast shopping experience using a **SmartProductSync** real-time caching system. Customers can browse thousands of products instantly, with automatic updates when prices or inventory change.
+
+## How Customers Browse Products
+
+### Instant Loading Experience
+
+When customers visit the store:
+
+1. **Immediate Display** - Products load instantly from local cache (no waiting)
+2. **Real-Time Updates** - The system connects to Firebase in the background
+3. **Live Inventory** - Stock levels and prices update automatically without page refresh
+4. **Smart Refresh** - Only changed products are downloaded (saves bandwidth)
+
+<Info>
+The first visit downloads the full catalog. Return visits only sync what changed since the last visit - typically just a few products.
+</Info>
+
+### Product Display
+
+Each product card shows:
+
+- **High-quality product image** (optimized loading)
+- **Product name and category**
+- **Current price** (updates in real-time)
+- **Discount badges** (if applicable with percentage)
+- **Stock status** (Available/Out of Stock)
+- **Action buttons** (Add to Cart or Configure Options)
+
+## Search and Filter System
+
+### Advanced Filtering
+
+Customers can filter products by multiple criteria:
+
+<Card title="Filter by Category" icon="folder">
+Main categories and subcategories appear dynamically based on available inventory. The count next to each category updates in real-time.
+</Card>
+
+<Card title="Filter by Brand" icon="tag">
+All available brands are listed with product counts. Only brands with stock are shown.
+</Card>
+
+<Card title="Filter by Color" icon="palette">
+Colors are extracted from product variants. Visual color swatches make selection intuitive.
+</Card>
+
+<Card title="Filter by Capacity" icon="memory">
+Storage capacities (64GB, 128GB, 256GB, etc.) are grouped for easy comparison.
+</Card>
+
+### How Filters Work
+
+```javascript
+// Behind the scenes: Dynamic filter counts
+const getPoolForCounting = (excludeKey) => {
+  // Filters products while respecting other active filters
+  // This ensures accurate counts for all available combinations
+}
+```
+
+Filters are **contextual** - when you select a category, only relevant subcategories appear. Product counts update instantly based on your selections.
+
+### Sorting Options
+
+Customers can sort products by:
+
+- **Newest First** (default)
+- **Price: Low to High**
+- **Price: High to Low**
+- **Alphabetical**
+- **Best Discounts** (in promotions view)
+
+## Smart Caching Technology
+
+### How SmartProductSync Works
+
+<Steps>
+  <Step title="First Visit">
+    Downloads all active products and stores them locally
+  </Step>
+  <Step title="Return Visits">
+    Only syncs products modified since last visit (delta updates)
+  </Step>
+  <Step title="Real-Time Monitoring">
+    Maintains live Firebase connection for instant price/stock changes
+  </Step>
+  <Step title="Automatic Updates">
+    If admin changes a product, customer sees it immediately
+  </Step>
+</Steps>
+
+### Benefits for Customers
+
+<CardGroup cols={2}>
+  <Card title="Instant Loading" icon="bolt">
+    Products appear immediately, no loading spinners
+  </Card>
+  <Card title="Offline Browsing" icon="wifi">
+    View products even with poor connection
+  </Card>
+  <Card title="Live Prices" icon="dollar-sign">
+    Always see current pricing and availability
+  </Card>
+  <Card title="Data Efficient" icon="database">
+    Only downloads what changed, saves mobile data
+  </Card>
+</CardGroup>
+
+## Product Variants System
+
+### Configuring Products
+
+Products with variants (colors, capacities) have special handling:
+
+1. **Automatic Detection** - System detects when variants exist
+2. **Configuration Modal** - Opens when customer clicks "Options"
+3. **Price Updates** - Price changes instantly when selecting different variants
+4. **Image Preview** - Product image updates to show selected color
+5. **Stock Validation** - Only available combinations are selectable
+
+### Variant Selection Flow
+
+<Tabs>
+  <Tab title="Simple Products">
+    **No Variants**
+    
+    Click "Add to Cart" → Item added instantly with default settings
+  </Tab>
+  <Tab title="Products with Colors">
+    **Color Selection Required**
+    
+    1. Click "Options" button
+    2. Select color from palette
+    3. Price updates (if color affects price)
+    4. Image changes to match selection
+    5. Click "Add to Cart"
+  </Tab>
+  <Tab title="Products with Capacity">
+    **Storage Selection Required**
+    
+    1. Click "Options" button
+    2. Select capacity (64GB, 128GB, etc.)
+    3. Price updates to match tier
+    4. Click "Add to Cart"
+  </Tab>
+  <Tab title="Both Color + Capacity">
+    **Full Configuration**
+    
+    1. Click "Options" button
+    2. Select color from swatches
+    3. Select capacity from buttons
+    4. Price updates based on combination
+    5. System validates stock availability
+    6. Click "Add to Cart"
+  </Tab>
+</Tabs>
+
+## Homepage Features
+
+### Featured Banners
+
+**Promotional Slider**
+- Auto-rotating hero banners (5 seconds each)
+- Manual navigation arrows
+- Custom banner images or auto-generated from product data
+- Smooth crossfade transitions
+
+**New Launches Banner**
+- Highlights newest arrivals
+- Similar auto-play and navigation
+- Different visual treatment than promotions
+
+### Product Collections
+
+<Card title="Weekly Choices" icon="star">
+Curated selection of featured products. If fewer than 4 are marked as "Weekly Choice", the system randomly fills with popular items.
+</Card>
+
+<Card title="Special Offers" icon="percent">
+Displays up to 15 products with active discounts. Sorted randomly to give all promos equal visibility.
+</Card>
+
+<Card title="Featured Products" icon="fire">
+Rotates every 8 days automatically. Shows 10 products per rotation cycle. Cached to avoid repetition during the cycle.
+</Card>
+
+<Card title="View History" icon="clock-rotate-left">
+Shows last 10 products the customer viewed. Stored locally for quick access.
+</Card>
+
+## Catalog Page
+
+### Full Product Grid
+
+The dedicated catalog page (`/shop/catalog.html`) offers:
+
+- **28 products per page** (optimized for performance)
+- **Pagination controls** (jump to any page)
+- **Mobile filter drawer** (slide-in on mobile devices)
+- **Sticky filters** (desktop sidebar remains visible while scrolling)
+- **Product count display** (always shows number of results)
+- **URL parameters** (can link directly to filtered views)
+
+### Special Promotions Mode
+
+Accessing `/shop/catalog.html?mode=promos` activates:
+
+- Filters to only show discounted products
+- Default sort by biggest discount
+- Red accent theme
+- "Limited Time" messaging
+
+## Real-Time Synchronization
+
+### What Updates Automatically
+
+<Accordion title="Price Changes">
+If an admin changes a product price, all customers browsing see the new price within seconds. Already-added cart items maintain their price at time of adding.
+</Accordion>
+
+<Accordion title="Stock Updates">
+When a product sells out, the "Out of Stock" badge appears automatically. If it comes back in stock, the button reappears without page reload.
+</Accordion>
+
+<Accordion title="New Products">
+When admin adds a new product, it appears in the catalog for all customers within seconds.
+</Accordion>
+
+<Accordion title="Product Removal">
+If a product is deactivated or deleted, it disappears from the catalog immediately.
+</Accordion>
+
+## Technical Implementation
+
+### Cache Structure
+
+```json
+{
+  "map": {
+    "product_id_1": {
+      "id": "product_id_1",
+      "name": "iPhone 14 Pro",
+      "price": 4500000,
+      "status": "active",
+      "stock": 12,
+      "category": "Smartphones",
+      "brand": "Apple",
+      "hasVariants": true,
+      "variants": [...],
+      "updatedAt": "2024-03-05T10:30:00Z"
+    }
+  },
+  "lastSync": 1709635800000
+}
+```
+
+This structure is stored in `localStorage` under key `pixeltech_master_catalog`.
+
+### Delta Update Logic
+
+```javascript
+// Only query products modified since last visit
+if (lastSyncTime === 0) {
+  // First visit: download all active products
+  q = query(collectionRef, where("status", "==", "active"));
+} else {
+  // Return visit: only get what changed
+  q = query(collectionRef, where("updatedAt", ">", new Date(lastSyncTime)));
+}
+```
+
+<Note>
+The catalog system is designed for scalability. A store with 10,000 products performs as fast as one with 100 products thanks to smart caching.
+</Note>
+
+## Related Features
+
+<CardGroup cols={2}>
+  <Card title="Shopping Cart" icon="cart-shopping" href="/features/cart-checkout">
+    Learn how products move from catalog to purchase
+  </Card>
+  <Card title="Order Tracking" icon="truck-fast" href="/features/order-tracking">
+    Track orders after purchase
+  </Card>
+</CardGroup>

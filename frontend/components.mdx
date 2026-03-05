@@ -1,0 +1,285 @@
+---
+title: 'Frontend Components'
+description: 'Reusable UI components for the PixelTech e-commerce platform'
+icon: 'cubes'
+---
+
+## Overview
+
+PixelTech uses a modular component architecture defined in `public/js/global-components.js`. Components include global header, footer, navigation, and interactive UI elements.
+
+## Global Components
+
+### Header Component
+
+The global header is injected via `loadGlobalHeader()` from `global-components.js:7-263`:
+
+```javascript
+export function loadGlobalHeader() {
+    const headerContainer = document.getElementById('global-header');
+    if (!headerContainer) return;
+    
+    // Inject header HTML
+    headerContainer.innerHTML = `...`;
+    
+    initHeaderLogic();
+    initSearchLogic();
+}
+```
+
+**Features:**
+- Responsive navigation bar
+- Live product search with autocomplete
+- Shopping cart drawer
+- User authentication status
+- WhatsApp contact modal
+
+### Search Functionality
+
+Real-time search with debouncing (`global-components.js:278-395`):
+
+```javascript
+function initSearchLogic() {
+    const setupSearch = (inputId, resultsId) => {
+        const input = document.getElementById(inputId);
+        let debounceTimer;
+        
+        input.addEventListener('input', (e) => {
+            const term = e.target.value.trim().toLowerCase();
+            clearTimeout(debounceTimer);
+            
+            debounceTimer = setTimeout(async () => {
+                // Search from cache first
+                const cachedRaw = localStorage.getItem('pixeltech_master_catalog');
+                let localProducts = Object.values(JSON.parse(cachedRaw).map || {});
+                
+                const results = localProducts.filter(p => {
+                    return p.name.toLowerCase().includes(term) && p.status === 'active';
+                });
+                
+                renderResults(results.slice(0, 5), term);
+            }, 300);
+        });
+    };
+}
+```
+
+<Info>
+Search uses the SmartProductSync cache first for instant results, falling back to Firestore if cache is empty.
+</Info>
+
+### Cart Drawer
+
+Sliding cart panel with real-time updates:
+
+```javascript
+window.toggleCartDrawer = () => {
+    const cartDrawer = document.getElementById('cart-drawer');
+    const cartOverlay = document.getElementById('cart-overlay');
+    
+    if (isClosed) {
+        cartDrawer.classList.remove('translate-x-full');
+        window.renderCartDrawerItems();
+    } else {
+        cartDrawer.classList.add('translate-x-full');
+    }
+};
+```
+
+**Cart Features:**
+- Free shipping progress bar
+- Quantity adjustment controls
+- Out-of-stock detection
+- Real-time subtotal calculation
+
+## Product Card Components
+
+From `app.js:472-524`, the action buttons adapt to product variants:
+
+```javascript
+function getActionButtonsHTML(product, isSmall, mode, prefix, isFullWidth) {
+    const qtyInCart = getProductQtyInCart(product.id);
+    const hasVariants = product.hasVariants || product.hasCapacities;
+    
+    if (qtyInCart > 0) {
+        // Show quantity controls
+        return `
+            <div class="flex items-center justify-between bg-brand-black text-white">
+                <button onclick="window.updateCardQty('${product.id}', -1)">-</button>
+                <span>${qtyInCart}</span>
+                <button onclick="window.updateCardQty('${product.id}', 1)">+</button>
+            </div>
+        `;
+    } else {
+        // Show add button
+        const action = hasVariants 
+            ? `window.openGlobalModal('${product.id}')` 
+            : `window.quickAdd('${product.id}')`;
+            
+        return `<button onclick="${action}">AGREGAR</button>`;
+    }
+}
+```
+
+### Variant Modal System
+
+Global modal for product customization (`app.js:172-245`):
+
+```javascript
+window.openGlobalModal = (id) => {
+    const p = runtimeProductsMap[id];
+    const modal = getGlobalModal();
+    
+    // Build color options
+    if (p.hasVariants && p.variants?.length > 0) {
+        html += p.variants.map((v, idx) => `
+            <button onclick="window.selectVariantOption('modal', 'color', '${v.color}', this)"
+                class="w-10 h-10 rounded-full ${idx === 0 ? 'ring-brand-cyan' : 'ring-gray-100'}"
+                style="background-color: ${getColorHex(v.color)}">
+            </button>
+        `);
+    }
+    
+    // Build capacity options
+    if (p.hasCapacities && p.capacities?.length > 0) {
+        html += p.capacities.map((c, idx) => `
+            <button onclick="window.selectVariantOption('modal', 'capacity', '${c.label}', this)"
+                class="${idx === 0 ? 'bg-brand-black' : 'bg-white'}">
+                ${c.label}
+            </button>
+        `);
+    }
+};
+```
+
+**Modal Features:**
+- Color picker with visual swatches
+- Capacity selection buttons
+- Real-time price calculation
+- Image preview updates
+
+### Card Overlay System
+
+Alternative variant selector for compact cards (`app.js:255-362`):
+
+```javascript
+window.openCardOverlay = (id, prefix) => {
+    const overlay = document.getElementById(`overlay-${prefix}-${id}`);
+    overlay.classList.remove('hidden', 'opacity-0');
+    overlay.classList.add('flex', 'opacity-100');
+};
+```
+
+## Toast Notifications
+
+Global toast system for user feedback (`global-components.js:265-276`):
+
+```javascript
+window.showToast = (msg, type = 'success') => {
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    
+    let icon = type === 'error' 
+        ? '<i class="fa-solid fa-circle-exclamation text-brand-red"></i>'
+        : '<i class="fa-solid fa-circle-check text-brand-cyan"></i>';
+        
+    toast.innerHTML = `${icon}<span class="toast-msg">${msg}</span>`;
+    container.appendChild(toast);
+    
+    requestAnimationFrame(() => toast.classList.add('show'));
+    setTimeout(() => toast.remove(), 3000);
+};
+```
+
+**Usage:**
+```javascript
+window.showToast('Producto agregado al carrito', 'success');
+window.showToast('Stock insuficiente', 'error');
+```
+
+## Admin Components
+
+Admin-specific UI elements from `public/js/admin-ui.js`:
+
+- **Data Tables**: Sortable, filterable product/order lists
+- **Form Builders**: Dynamic form generation for products
+- **File Uploaders**: Image upload with preview
+- **Modal Dialogs**: Confirmation and edit modals
+
+## Component Styling
+
+All components use Tailwind CSS utility classes with custom brand colors:
+
+```html
+<button class="bg-brand-cyan text-brand-black hover:bg-cyan-400">
+  Primary Action
+</button>
+
+<div class="bg-brand-black text-white border border-slate-800">
+  Dark Container
+</div>
+```
+
+See [Styling System](/frontend/styling) for complete design system documentation.
+
+## Event System
+
+Components communicate via custom events:
+
+<CodeGroup>
+```javascript Cart Updates
+window.addEventListener('cartUpdated', () => {
+    window.updateCartCountGlobal();
+    window.renderCartDrawerItems();
+});
+
+window.dispatchEvent(new Event('cartUpdated'));
+```
+
+```javascript Catalog Updates
+window.addEventListener('catalogUpdated', () => {
+    refreshAllGrids();
+});
+```
+
+```javascript Shipping Config
+window.addEventListener('shippingConfigUpdated', () => {
+    window.renderCartDrawerItems(); // Update free shipping bar
+});
+```
+</CodeGroup>
+
+## Mobile Components
+
+Mobile-specific navigation (`global-components.js:156-180`):
+
+```html
+<nav class="lg:hidden fixed bottom-0 w-full bg-white">
+  <a href="/" class="nav-item">
+    <i class="fa-solid fa-house"></i>
+    <span>Inicio</span>
+  </a>
+  <button id="mobile-categories-btn" class="nav-item">
+    <i class="fa-solid fa-layer-group"></i>
+    <span>Categorías</span>
+  </button>
+  <button onclick="window.toggleCartDrawer()" class="nav-item">
+    <i class="fa-solid fa-cart-shopping"></i>
+    <span>Carrito</span>
+  </button>
+</nav>
+```
+
+## Best Practices
+
+1. **Always use global functions** (`window.functionName`) for cross-file component access
+2. **Dispatch events** when state changes to keep UI in sync
+3. **Use debouncing** for expensive operations like search
+4. **Leverage SmartProductSync cache** for instant data access
+5. **Handle loading states** with skeleton screens or spinners
+
+## Related Documentation
+
+- [SmartProductSync System](/frontend/smart-sync)
+- [Styling System](/frontend/styling)
+- [API Collections](/api/collections/products)

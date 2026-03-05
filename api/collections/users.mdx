@@ -1,0 +1,295 @@
+---
+title: 'Users Collection'
+description: 'Firestore schema for user profiles and authentication data'
+icon: 'users'
+---
+
+## Overview
+
+The `users` collection stores user profile information, roles, and preferences. Each document is keyed by the Firebase Auth UID.
+
+## Collection Path
+
+```
+users/{userId}
+```
+
+## Document Schema
+
+<ResponseField name="User Document" type="object">
+  <Expandable title="Authentication">
+    <ResponseField name="email" type="string" required>
+      User's email address (synced from Firebase Auth)
+    </ResponseField>
+    <ResponseField name="displayName" type="string">
+      User's full name
+    </ResponseField>
+    <ResponseField name="photoURL" type="string">
+      Profile picture URL
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Role & Permissions">
+    <ResponseField name="role" type="string" required>
+      User role: `customer`, `admin`, or `staff`
+    </ResponseField>
+    <ResponseField name="permissions" type="array">
+      Granular permissions array (e.g., `["orders.read", "products.write"]`)
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Profile Information">
+    <ResponseField name="phone" type="string">
+      Contact phone number
+    </ResponseField>
+    <ResponseField name="document" type="string">
+      Government ID number (Cédula)
+    </ResponseField>
+    <ResponseField name="addresses" type="array">
+      Saved delivery addresses
+      ```javascript
+      [
+        {
+          label: 'Casa',
+          address: 'Calle 123 #45-67',
+          city: 'Bogotá',
+          department: 'Cundinamarca',
+          isDefault: true
+        }
+      ]
+      ```
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Timestamps">
+    <ResponseField name="createdAt" type="timestamp" required>
+      Account creation date
+    </ResponseField>
+    <ResponseField name="lastLogin" type="timestamp">
+      Last authentication timestamp
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Preferences">
+    <ResponseField name="emailNotifications" type="boolean" default="true">
+      Enable/disable email notifications
+    </ResponseField>
+    <ResponseField name="whatsappNotifications" type="boolean" default="false">
+      Enable/disable WhatsApp updates
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Example Document
+
+```json
+{
+  "email": "juan.perez@example.com",
+  "displayName": "Juan Pérez",
+  "photoURL": "https://lh3.googleusercontent.com/...",
+  
+  "role": "customer",
+  "permissions": [],
+  
+  "phone": "3001234567",
+  "document": "1234567890",
+  
+  "addresses": [
+    {
+      "label": "Casa",
+      "address": "Calle 123 #45-67 Apto 301",
+      "city": "Bogotá",
+      "department": "Cundinamarca",
+      "isDefault": true
+    },
+    {
+      "label": "Oficina",
+      "address": "Carrera 7 #32-16 Piso 5",
+      "city": "Bogotá",
+      "department": "Cundinamarca",
+      "isDefault": false
+    }
+  ],
+  
+  "createdAt": "2026-01-15T10:00:00Z",
+  "lastLogin": "2026-03-05T09:30:00Z",
+  
+  "emailNotifications": true,
+  "whatsappNotifications": false
+}
+```
+
+## Queries
+
+### Get User by ID
+
+```javascript
+const userDoc = await db.collection('users').doc(userId).get();
+const userData = userDoc.data();
+```
+
+### Get All Admins
+
+```javascript
+const snapshot = await db.collection('users')
+    .where('role', '==', 'admin')
+    .get();
+```
+
+### Search Users by Email
+
+```javascript
+const snapshot = await db.collection('users')
+    .where('email', '>=', searchTerm)
+    .where('email', '<=', searchTerm + '\uf8ff')
+    .get();
+```
+
+## Role-Based Access
+
+### Customer Role
+
+Default role for all new users:
+- Can view own orders
+- Can update own profile
+- Can create orders via checkout
+
+### Admin Role
+
+Full platform access:
+- Can view/edit all orders
+- Can manage products
+- Can access treasury/reports
+- Can manage users
+
+### Staff Role (Optional)
+
+Limited admin access:
+- Can view orders
+- Can update order status
+- Cannot manage products or users
+
+## User Creation Flow
+
+When a user signs up via Firebase Auth:
+
+```javascript
+// In auth-logic.js or Cloud Function
+await db.collection('users').doc(user.uid).set({
+    email: user.email,
+    displayName: user.displayName || '',
+    photoURL: user.photoURL || '',
+    role: 'customer',
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    lastLogin: admin.firestore.FieldValue.serverTimestamp(),
+    emailNotifications: true
+});
+```
+
+## Checking Admin Status
+
+From `global-components.js:646-656`:
+
+```javascript
+onAuthStateChanged(auth, async (user) => {
+    if (user) {
+        // Check cached role
+        let role = sessionStorage.getItem('pixeltech_user_role');
+        
+        if (!role) {
+            const userSnap = await getDoc(doc(db, "users", user.uid));
+            role = (userSnap.exists() && userSnap.data().role === 'admin') 
+                ? 'admin' 
+                : 'customer';
+            sessionStorage.setItem('pixeltech_user_role', role);
+        }
+        
+        const isAdmin = role === 'admin';
+        const link = isAdmin ? '/admin/index.html' : '/profile.html';
+        // Update UI...
+    }
+});
+```
+
+## Security Rules
+
+Recommended Firestore security rules:
+
+```javascript
+match /users/{userId} {
+  // Users can read their own profile
+  allow read: if request.auth != null && request.auth.uid == userId;
+  
+  // Users can update their own profile (except role)
+  allow update: if request.auth != null && 
+                request.auth.uid == userId &&
+                request.resource.data.role == resource.data.role;
+  
+  // Admins can read/write all users
+  allow read, write: if request.auth != null &&
+                      get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+  
+  // User creation via Cloud Functions or Auth triggers only
+  allow create: if false;
+}
+```
+
+## Indexes
+
+Required indexes:
+
+```javascript
+// Role-based queries
+users: [role ASC]
+
+// Email search
+users: [email ASC]
+
+// Recent users
+users: [createdAt DESC]
+```
+
+## Profile Management
+
+### Update Profile
+
+```javascript
+await db.collection('users').doc(userId).update({
+    displayName: newName,
+    phone: newPhone,
+    document: newDocument
+});
+```
+
+### Add Address
+
+```javascript
+await db.collection('users').doc(userId).update({
+    addresses: admin.firestore.FieldValue.arrayUnion({
+        label: 'Nueva Dirección',
+        address: 'Calle 456 #78-90',
+        city: 'Medellín',
+        department: 'Antioquia',
+        isDefault: false
+    })
+});
+```
+
+### Set Default Address
+
+```javascript
+const userDoc = await db.collection('users').doc(userId).get();
+const addresses = userDoc.data().addresses || [];
+
+const updated = addresses.map((addr, idx) => ({
+    ...addr,
+    isDefault: idx === targetIndex
+}));
+
+await db.collection('users').doc(userId).update({ addresses: updated });
+```
+
+## Related Documentation
+
+- [Orders Collection](/api/collections/orders)
+- [Chats Collection](/api/collections/chats)

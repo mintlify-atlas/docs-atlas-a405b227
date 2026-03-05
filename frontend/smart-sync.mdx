@@ -1,0 +1,188 @@
+---
+title: 'SmartProductSync System'
+description: 'Real-time catalog synchronization with offline-first caching strategy'
+icon: 'arrows-rotate'
+---
+
+## Overview
+
+The SmartProductSync system is a sophisticated real-time catalog synchronization engine that provides instant product loading using localStorage cache while maintaining real-time updates from Firestore.
+
+## Architecture
+
+<Card title="Dual-Mode Strategy" icon="layer-group">
+  **Instant Load**: Products load immediately from localStorage cache
+  **Real-Time Updates**: Firebase onSnapshot provides delta updates only for changed products
+</Card>
+
+## Implementation
+
+The SmartProductSync is defined in `public/js/app.js:12-113`:
+
+```javascript
+const SmartProductSync = {
+    STORAGE_KEY: 'pixeltech_master_catalog',
+    isListening: false,
+    
+    async init() {
+        // 1. Instant cache load
+        const localData = localStorage.getItem(this.STORAGE_KEY);
+        let lastSyncTime = 0;
+        
+        if (localData) {
+            const parsed = JSON.parse(localData);
+            runtimeProductsMap = parsed.map || {};
+            lastSyncTime = parsed.lastSync || 0;
+            allProductsCache = Object.values(runtimeProductsMap);
+        }
+
+        // 2. Start real-time connection
+        this.listenForUpdates(lastSyncTime);
+        return true;
+    }
+}
+```
+
+## Key Features
+
+### 1. Offline-First Caching
+
+Products are stored in `localStorage` with the key `pixeltech_master_catalog`:
+
+```javascript
+{
+  map: { [productId]: productData },
+  lastSync: 1234567890 // Timestamp
+}
+```
+
+<Info>
+On first load, the catalog appears **instantly** from cache without waiting for Firebase.
+</Info>
+
+### 2. Delta Updates with onSnapshot
+
+The sync system uses Firestore's `onSnapshot` to listen only for changes since the last sync:
+
+```javascript
+listenForUpdates(lastSyncTime) {
+    let q;
+    
+    if (lastSyncTime === 0) {
+        // First-time user: Download all active products
+        q = query(collectionRef, where("status", "==", "active"));
+    } else {
+        // Returning user: Listen only for updates since last visit
+        q = query(collectionRef, where("updatedAt", ">", new Date(lastSyncTime)));
+    }
+    
+    onSnapshot(q, (snapshot) => {
+        snapshot.docChanges().forEach(change => {
+            // Process only changed documents
+        });
+    });
+}
+```
+
+### 3. Change Detection
+
+The system analyzes document changes to minimize resource usage:
+
+```javascript
+snapshot.docChanges().forEach(change => {
+    const data = change.doc.data();
+    const id = change.doc.id;
+
+    if (change.type === 'added' || change.type === 'modified') {
+        if (data.status === 'active') {
+            runtimeProductsMap[id] = { id, ...data };
+        } else {
+            delete runtimeProductsMap[id];
+        }
+    } else if (change.type === 'removed') {
+        delete runtimeProductsMap[id];
+    }
+});
+```
+
+## Performance Benefits
+
+<CardGroup cols={3}>
+  <Card title="Instant Load" icon="bolt">
+    Products appear in <strong>~50ms</strong> from localStorage
+  </Card>
+  <Card title="Bandwidth Savings" icon="cloud-arrow-down">
+    Only downloads changed products (delta sync)
+  </Card>
+  <Card title="Always Fresh" icon="sync">
+    Real-time updates for price/stock changes
+  </Card>
+</CardGroup>
+
+## State Persistence
+
+The system automatically saves state after each update:
+
+```javascript
+saveState() {
+    const state = {
+        map: runtimeProductsMap,
+        lastSync: Date.now()
+    };
+    localStorage.setItem(this.STORAGE_KEY, JSON.stringify(state));
+}
+```
+
+## UI Updates
+
+When the catalog updates, a global event is dispatched:
+
+```javascript
+window.dispatchEvent(new Event('catalogUpdated'));
+```
+
+Components listen for this event to re-render with updated prices/stock:
+
+```javascript
+window.addEventListener('catalogUpdated', () => {
+    // Refresh product grids, cards, etc.
+    refreshAllGrids();
+});
+```
+
+## Usage Example
+
+Initialize the sync system on page load:
+
+```javascript
+// In app.js initialization
+await SmartProductSync.init();
+loadPromoSlider();
+loadBestSellers();
+```
+
+## Error Handling
+
+<Warning>
+If localStorage quota is exceeded, the cache won't persist but the app continues functioning with live data.
+</Warning>
+
+```javascript
+try {
+    localStorage.setItem(this.STORAGE_KEY, JSON.stringify(state));
+} catch (e) {
+    console.warn("⚠️ Quota exceeded. Cache won't persist.");
+}
+```
+
+## Best Practices
+
+1. **Always initialize before loading UI components**
+2. **Listen for `catalogUpdated` events** in dynamic components
+3. **Handle cache corruption gracefully** with try-catch
+4. **Update `updatedAt` timestamps** in Firestore when products change
+
+## Related Systems
+
+- [Frontend Components](/frontend/components) - UI components that consume the catalog
+- [API Collections](/api/collections/products) - Firestore products collection schema

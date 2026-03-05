@@ -1,0 +1,452 @@
+---
+title: 'Customer Management'
+description: 'Manage customer accounts, profiles, and purchase history'
+icon: 'users'
+---
+
+## Customer Database
+
+Customer data is stored in the `users` collection with role-based access control.
+
+### User Document Structure
+
+```javascript
+{
+  uid: "firebase-auth-uid",
+  name: "María Rodríguez",
+  email: "maria@example.com",
+  phone: "3001234567",
+  role: "customer", // or "admin"
+  createdAt: Timestamp,
+  addresses: [
+    {
+      alias: "Casa",
+      address: "Calle 123 #45-67, Apto 801",
+      city: "Bogotá",
+      dept: "Cundinamarca",
+      isDefault: true
+    }
+  ]
+}
+```
+
+### Security Rules
+
+```javascript
+match /users/{userId} {
+  allow read, write: if isOwner(userId) || isAdmin();
+  
+  match /addresses/{addressId} {
+    allow read, write: if isOwner(userId) || isAdmin();
+  }
+}
+```
+
+<Info>
+  Customers can only access their own data. Admins have full read/write access to all customer accounts.
+</Info>
+
+## Customer List and Search
+
+### Client Cache for Performance
+
+From `manual-sale.js`:
+
+```javascript
+let manualClientsCache = [];
+
+async function loadCaches() {
+    try {
+        if (manualClientsCache.length === 0) {
+            const cSnap = await getDocs(collection(db, "users"));
+            manualClientsCache = cSnap.docs.map(d => ({ 
+                id: d.id, 
+                ...d.data() 
+            }));
+        }
+    } catch(e) {
+        console.error("Error loading customers:", e);
+    }
+}
+```
+
+### Search Implementation
+
+Normalized text search (accent-insensitive):
+
+```javascript
+function normalizeText(text) {
+    return text ? text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase() : "";
+}
+
+const filtered = manualClientsCache.filter(u => {
+    const nameMatch = normalizeText(u.name || "").includes(term);
+    const phoneMatch = (u.phone || "").includes(term);
+    return nameMatch || phoneMatch;
+});
+```
+
+<Tip>
+  Search works for partial matches and ignores accents. "maria" will match "María Rodríguez".
+</Tip>
+
+## Customer Details and History
+
+### Order History
+
+Query customer's past orders:
+
+```javascript
+const customerOrders = query(
+    collection(db, "orders"),
+    where("userId", "==", customerId),
+    orderBy("createdAt", "desc")
+);
+
+const snapshot = await getDocs(customerOrders);
+const orders = snapshot.docs.map(doc => ({
+    id: doc.id,
+    ...doc.data()
+}));
+```
+
+### Spending Analysis
+
+Calculate customer lifetime value:
+
+```javascript
+function calculateCustomerMetrics(orders) {
+    const completed = orders.filter(o => 
+        ['ENTREGADO', 'DESPACHADO'].includes(o.status)
+    );
+    
+    const totalSpent = completed.reduce((sum, o) => sum + o.total, 0);
+    const averageOrder = totalSpent / completed.length || 0;
+    const pendingPayments = orders
+        .filter(o => o.paymentStatus === 'PENDING')
+        .reduce((sum, o) => sum + (o.total - (o.amountPaid || 0)), 0);
+    
+    return {
+        totalOrders: completed.length,
+        totalSpent,
+        averageOrder,
+        pendingPayments,
+        lastPurchase: completed[0]?.createdAt.toDate()
+    };
+}
+```
+
+### Account Status Badge
+
+From `admin-whatsapp.js`:
+
+```javascript
+els.infoBadge.textContent = customer.verified ? "Verificado" : "Sin verificar";
+els.infoBadge.className = customer.verified 
+    ? "px-2 py-0.5 bg-green-100 text-green-600 rounded text-[9px] font-bold uppercase"
+    : "px-2 py-0.5 bg-gray-100 text-gray-500 rounded text-[9px] font-bold uppercase";
+```
+
+## Address Management
+
+### Saved Addresses
+
+Customers can store multiple delivery addresses:
+
+```javascript
+await updateDoc(doc(db, "users", userId), {
+    addresses: arrayUnion({
+        alias: "Oficina",
+        address: "Av. El Dorado #68-90, Torre B",
+        city: "Bogotá",
+        dept: "Cundinamarca",
+        phone: "3009876543",
+        isDefault: false,
+        createdAt: new Date()
+    })
+});
+```
+
+### Address Selection in Manual Sales
+
+```javascript
+const savedSelect = document.getElementById('m-saved-addr-select');
+
+if (currentUserAddresses.length > 0) {
+    savedSelect.innerHTML = '<option value="">Seleccione Dirección...</option>';
+    
+    currentUserAddresses.forEach((addr, index) => {
+        savedSelect.innerHTML += `
+            <option value="${index}">
+                ${addr.alias} - ${addr.address}, ${addr.city}
+            </option>
+        `;
+    });
+}
+```
+
+## Creating New Customers
+
+### From WhatsApp CRM
+
+Create customer directly from chat interface:
+
+```javascript
+els.btnActClient.onclick = () => {
+    if (!activeChatId) return;
+    
+    // Pre-fill with WhatsApp data
+    els.inpClientName.value = "";
+    els.inpClientPhone.value = activeChatId.replace(/^57/, '');
+    els.inpClientDoc.value = "";
+    els.inpClientEmail.value = "";
+    els.inpClientAddr.value = "";
+    
+    // Load Colombian departments
+    fetch('https://api-colombia.com/api/v1/Department')
+        .then(r => r.json())
+        .then(departments => {
+            departments.sort((a,b) => a.name.localeCompare(b.name));
+            els.inpClientDept.innerHTML = '<option value="">Seleccione...</option>';
+            
+            departments.forEach(dept => {
+                els.inpClientDept.innerHTML += `
+                    <option value="${dept.id}" data-name="${dept.name}">
+                        ${dept.name}
+                    </option>
+                `;
+            });
+        });
+    
+    els.clientModal.classList.remove('hidden');
+};
+```
+
+### Department and City Selection
+
+```javascript
+els.inpClientDept.onchange = async (e) => {
+    if (!e.target.value) return;
+    
+    els.inpClientCity.disabled = true;
+    els.inpClientCity.innerHTML = '<option>Cargando...</option>';
+    
+    try {
+        const res = await fetch(
+            `https://api-colombia.com/api/v1/Department/${e.target.value}/cities`
+        );
+        const cities = await res.json();
+        
+        cities.sort((a,b) => a.name.localeCompare(b.name));
+        
+        els.inpClientCity.innerHTML = '<option value="">Ciudad...</option>';
+        cities.forEach(city => {
+            els.inpClientCity.innerHTML += `<option value="${city.name}">${city.name}</option>`;
+        });
+        
+        els.inpClientCity.disabled = false;
+    } catch (error) {
+        console.error('Error loading cities:', error);
+    }
+};
+```
+
+<Info>
+  Uses Colombia's official API for accurate department and city data.
+</Info>
+
+### Save Customer
+
+```javascript
+els.btnSaveClient.onclick = async () => {
+    const customerData = {
+        name: els.inpClientName.value.trim(),
+        phone: els.inpClientPhone.value.trim(),
+        document: els.inpClientDoc.value.trim(),
+        email: els.inpClientEmail.value.trim(),
+        role: "customer",
+        createdAt: new Date(),
+        addresses: [
+            {
+                alias: "Principal",
+                address: els.inpClientAddr.value.trim(),
+                dept: els.inpClientDept.options[els.inpClientDept.selectedIndex].dataset.name,
+                city: els.inpClientCity.value,
+                isDefault: true
+            }
+        ]
+    };
+    
+    if (!customerData.name || !customerData.phone) {
+        alert("Nombre y teléfono son obligatorios");
+        return;
+    }
+    
+    try {
+        await addDoc(collection(db, "users"), customerData);
+        alert("✅ Cliente creado exitosamente");
+        els.clientModal.classList.add('hidden');
+        
+        // Refresh cache
+        manualClientsCache = [];
+        await loadCaches();
+    } catch (error) {
+        console.error('Error creating customer:', error);
+        alert("Error al crear cliente: " + error.message);
+    }
+};
+```
+
+## Communication History
+
+### WhatsApp Integration
+
+Customer service conversations are linked to customer profiles:
+
+```javascript
+// Chat document structure
+{
+  chatId: "573001234567",      // WhatsApp phone number
+  clientName: "María Rodríguez",
+  lastMessage: "Gracias por la compra!",
+  lastMessageAt: Timestamp,
+  status: "open",              // or "resolved"
+  unread: false
+}
+
+// Messages subcollection
+collection(db, "chats/573001234567/messages")
+```
+
+### Linking Chats to Customers
+
+Match WhatsApp number to customer phone:
+
+```javascript
+const cleanPhone = activeChatId.replace(/^57/, '');
+const customerQuery = query(
+    collection(db, "users"),
+    where("phone", "==", cleanPhone),
+    limit(1)
+);
+
+const snapshot = await getDocs(customerQuery);
+if (!snapshot.empty) {
+    const customer = snapshot.docs[0].data();
+    // Display customer info in chat panel
+    displayCustomerProfile(customer);
+}
+```
+
+## Customer Segmentation
+
+### By Purchase Behavior
+
+<Tabs>
+  <Tab title="VIP Customers">
+    High-value customers (>$5M COP lifetime)
+    ```javascript
+    const vipCustomers = customers.filter(c => c.totalSpent > 5000000);
+    ```
+  </Tab>
+  
+  <Tab title="Regular Buyers">
+    3+ orders in last 6 months
+    ```javascript
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+    
+    const regular = customers.filter(c => 
+        c.orders.filter(o => o.createdAt > sixMonthsAgo).length >= 3
+    );
+    ```
+  </Tab>
+  
+  <Tab title="At-Risk">
+    No purchases in 90+ days
+    ```javascript
+    const ninetyDaysAgo = new Date();
+    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+    
+    const atRisk = customers.filter(c => 
+        c.lastPurchase < ninetyDaysAgo
+    );
+    ```
+  </Tab>
+  
+  <Tab title="Debtors">
+    Outstanding receivables
+    ```javascript
+    const debtors = customers.filter(c => c.pendingPayments > 0);
+    ```
+  </Tab>
+</Tabs>
+
+## Privacy and Data Protection
+
+<Warning>
+  **GDPR/CCPA Compliance**: Customer data must be handled according to privacy regulations.
+</Warning>
+
+### Data Access Logging
+
+Track who accesses customer information:
+
+```javascript
+await addDoc(collection(db, "audit_logs"), {
+    action: "VIEW_CUSTOMER",
+    adminId: auth.currentUser.uid,
+    adminName: auth.currentUser.displayName,
+    customerId: customerId,
+    timestamp: new Date(),
+    ipAddress: await getClientIP()
+});
+```
+
+### Data Retention
+
+Inactive accounts after 2 years:
+
+```javascript
+const twoYearsAgo = new Date();
+twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
+
+const inactiveCustomers = query(
+    collection(db, "users"),
+    where("lastActivityAt", "<", twoYearsAgo)
+);
+
+// Archive or delete according to policy
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Data Quality">
+    - Validate phone numbers (10 digits for Colombia)
+    - Require email for invoice requests
+    - Standardize address formatting
+    - Use official city/department data
+  </Accordion>
+  
+  <Accordion title="Customer Service">
+    - Link WhatsApp chats to customer profiles
+    - Track communication history
+    - Note customer preferences and issues
+    - Set reminders for follow-ups
+  </Accordion>
+  
+  <Accordion title="Financial Tracking">
+    - Monitor accounts receivable per customer
+    - Set credit limits for repeat buyers
+    - Flag customers with payment issues
+    - Reward loyal customers with discounts
+  </Accordion>
+  
+  <Accordion title="Privacy Compliance">
+    - Only collect necessary data
+    - Secure storage with Firebase rules
+    - Log all admin access
+    - Honor deletion requests promptly
+  </Accordion>
+</AccordionGroup>

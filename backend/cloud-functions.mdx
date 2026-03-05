@@ -1,0 +1,524 @@
+---
+title: Cloud Functions
+description: Firebase Cloud Functions architecture and implementation for PixelTech Colombia
+---
+
+## Overview
+
+PixelTech Colombia uses Firebase Cloud Functions to handle server-side operations including payment processing, email notifications, scheduled tasks, and webhooks. All functions are implemented in Node.js using the Firebase Functions SDK.
+
+## Architecture
+
+The functions are organized in modular files located in `functions/` directory:
+
+```
+functions/
+├── index.js              # Main entry point and exports
+├── mercadopago.js        # MercadoPago integration
+├── addi.js               # ADDI payment integration
+├── sistecredito.js       # Sistecrédito integration
+├── cod.js                # Cash on delivery (Contra Entrega)
+├── emails.js             # Email notifications
+├── scheduler.js          # Scheduled maintenance tasks
+├── whatsapp.js           # WhatsApp Business API
+├── google-merchant.js    # Google Merchant Center feed
+├── sitemap.js            # Dynamic sitemap generation
+└── sync.js               # Product sync utilities
+```
+
+### Initialization
+
+All functions share a single Firebase Admin SDK instance initialized in `functions/index.js:9-11`:
+
+```javascript
+if (!admin.apps.length) {
+    admin.initializeApp();
+}
+```
+
+## Payment Functions
+
+### MercadoPago
+
+**Create Preference**: `createMercadoPagoPreference`
+- **Type**: Callable Function
+- **File**: `functions/mercadopago.js:18`
+- **Purpose**: Creates a MercadoPago checkout preference with 30-minute expiration
+
+**Key Features**:
+- User authentication via Firebase Auth token
+- Real-time price validation from Firestore
+- Creates order with `PENDIENTE_PAGO` status
+- Handles product variants (color, capacity)
+- Automatic expiration after 30 minutes
+
+```javascript
+exports.createMercadoPagoPreference = functions.https.onCall(mpModule.createPreference);
+```
+
+**Webhook**: `mercadoPagoWebhook`
+- **Type**: HTTPS Request
+- **File**: `functions/mercadopago.js:174`
+- **Endpoint**: `https://us-central1-pixeltechcol.cloudfunctions.net/mercadoPagoWebhook`
+
+**Webhook Flow** (`functions/mercadopago.js:204-306`):
+1. Receives payment notification
+2. Verifies payment status with MercadoPago API
+3. **On Approved**:
+   - Deducts inventory (with variant support)
+   - Updates treasury account balance
+   - Creates expense/income record
+   - Generates remission document
+   - Updates order status to `PAGADO`
+4. **On Rejected**: Marks order as `RECHAZADO`
+
+### ADDI
+
+**Create Checkout**: `createAddiCheckout`
+- **Type**: Callable Function
+- **File**: `functions/addi.js:59`
+- **Purpose**: Creates ADDI "Buy Now, Pay Later" checkout
+
+**Authentication** (`functions/addi.js:29-54`):
+```javascript
+async function getAddiToken() {
+    const response = await axios.post(`${ADDI_AUTH_URL}/oauth/token`, {
+        client_id: ADDI_CLIENT_ID,
+        client_secret: ADDI_CLIENT_SECRET,
+        audience: ADDI_AUDIENCE,
+        grant_type: "client_credentials"
+    });
+    return response.data.access_token;
+}
+```
+
+**Webhook**: `addiWebhook`
+- **Type**: HTTPS Request with CORS
+- **File**: `functions/addi.js:260`
+- **Duplicate Protection**: Checks `paymentStatus === 'PAID'` before processing (`functions/addi.js:281-284`)
+
+### Sistecrédito
+
+**Create Checkout**: `createSistecreditoCheckout`
+- **Type**: Callable Function
+- **File**: `functions/sistecredito.js:22`
+- **Purpose**: Colombian credit system integration
+
+**API Configuration** (`functions/sistecredito.js:15-17`):
+```javascript
+const SC_BASE_URL = "https://api.credinet.co/pay";
+const SC_WEBHOOK_URL = "https://sistecreditowebhook-muiondpggq-uc.a.run.app";
+```
+
+**Webhook**: `sistecreditoWebhook`
+- **File**: `functions/sistecredito.js:172`
+- **Status Mapping**: `Approved` → `PAGADO`, `Rejected`/`Cancelled`/`Failed` → `RECHAZADO`
+
+### Cash on Delivery (COD)
+
+**Create Order**: `createCODOrder`
+- **Type**: Callable Function
+- **File**: `functions/cod.js:4`
+- **Purpose**: Creates order with immediate stock deduction
+
+**Key Difference**: Unlike payment gateways, COD:
+- Sets `isStockDeducted: true` immediately (`functions/cod.js:103`)
+- Creates remission document instantly (`functions/cod.js:127`)
+- No webhook needed - order is created as `PENDIENTE` (awaiting fulfillment)
+
+**Transaction Safety** (`functions/cod.js:45-128`):
+```javascript
+await db.runTransaction(async (t) => {
+    // Phase 1: Reads only
+    for (const item of rawItems) {
+        const pDoc = await t.get(pRef);
+        // Validate stock, prepare updates
+    }
+    
+    // Phase 2: Writes only
+    for (const update of pendingUpdates) {
+        t.update(update.ref, update.data);
+    }
+    t.set(newOrderRef, orderData);
+    t.set(remissionRef, remissionData);
+});
+```
+
+## Email Functions
+
+### Order Confirmation
+
+**Function**: `sendOrderConfirmation`
+- **Type**: Firestore Trigger (onCreate)
+- **File**: `functions/emails.js:222`
+- **Trigger**: `orders/{orderId}` document creation
+
+```javascript
+exports.sendOrderConfirmation = onDocumentCreated("orders/{orderId}", async (event) => {
+    const orderData = event.data.data();
+    const email = orderData.buyerInfo?.email;
+    // Send email...
+});
+```
+
+### Dispatch Notification
+
+**Function**: `sendDispatchNotification`
+- **Type**: Firestore Trigger (onUpdate)
+- **File**: `functions/emails.js:255`
+- **Trigger**: Order status changes to `dispatched`, `enviado`, `DESPACHADO`, or `EN_RUTA`
+
+**Email Template** (`functions/emails.js:36-219`):
+- Professional HTML design with brand colors
+- Responsive layout (600px max-width)
+- Dynamic tracking information
+- Integrated WhatsApp support link
+- Product images and details
+
+**SMTP Configuration** (`functions/emails.js:5-13`):
+```javascript
+const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: parseInt(process.env.SMTP_PORT) || 465,
+    secure: true,
+    auth: {
+        user: process.env.SMTP_EMAIL,
+        pass: process.env.SMTP_PASSWORD
+    }
+});
+```
+
+## Scheduler Functions
+
+### Process Scheduled Transfers
+
+**Function**: `processScheduledTransfers`
+- **Schedule**: Daily at 00:05 AM (Colombia time)
+- **File**: `functions/scheduler.js:11`
+
+```javascript
+exports.processScheduledTransfers = onSchedule({
+    schedule: "5 0 * * *", 
+    timeZone: "America/Bogota"
+}, async (event) => {
+    // Process pending transfers...
+});
+```
+
+**Logic** (`functions/scheduler.js:22-115`):
+1. Query `scheduled_transfers` where `status == 'PENDING'` and `scheduledDate <= now`
+2. For each transfer:
+   - Deduct from source account
+   - Add to target account
+   - Mark transfer as `COMPLETED`
+   - Create expense records for audit trail
+3. Handle failures gracefully (mark as `FAILED`)
+
+### Cleanup Old Orders
+
+**Function**: `cleanupOldOrders`
+- **Schedule**: Every 24 hours
+- **File**: `functions/scheduler.js:117`
+- **Purpose**: Removes abandoned orders older than 7 days
+
+```javascript
+const sevenDaysAgo = new Date();
+sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+const snapshot = await db.collection('orders')
+    .where('createdAt', '<', sevenDaysAgo)
+    .where('status', 'in', ['PENDIENTE_PAGO', 'RECHAZADO', 'CANCELADO'])
+    .get();
+```
+
+### Cancel Abandoned Payments
+
+**Function**: `cancelAbandonedPayments`
+- **Schedule**: Every 15 minutes
+- **File**: `functions/scheduler.js:157`
+- **Purpose**: Auto-cancels orders pending payment for >35 minutes
+
+**Grace Period**: 35 minutes (5 minutes buffer over MercadoPago's 30-minute expiration)
+
+```javascript
+const timeout = new Date();
+timeout.setMinutes(timeout.getMinutes() - 35);
+
+const snapshot = await db.collection('orders')
+    .where('status', '==', 'PENDIENTE_PAGO')
+    .where('createdAt', '<=', timeoutTimestamp)
+    .get();
+```
+
+### Check Expired Promotions
+
+**Function**: `checkExpiredPromotions`
+- **Schedule**: Every 60 minutes
+- **File**: `functions/scheduler.js:217`
+- **Purpose**: Restores original prices when promotions expire
+
+```javascript
+const snapshot = await db.collection('products')
+    .where('promoEndsAt', '<=', now)
+    .get();
+
+snapshot.docs.forEach((doc) => {
+    if (p.originalPrice && p.originalPrice > 0) {
+        batch.update(doc.ref, {
+            price: p.originalPrice,
+            originalPrice: 0,
+            promoEndsAt: null
+        });
+    }
+});
+```
+
+## WhatsApp Functions
+
+### Webhook Handler
+
+**Function**: `whatsappWebhook`
+- **Type**: HTTPS Request
+- **File**: `functions/whatsapp.js:65`
+- **Purpose**: Receives messages from WhatsApp Business API
+
+**Verification** (`functions/whatsapp.js:67-72`):
+```javascript
+if (req.method === "GET") {
+    if (req.query["hub.mode"] === "subscribe" && 
+        req.query["hub.verify_token"] === VERIFY_TOKEN) {
+        res.status(200).send(req.query["hub.challenge"]);
+    }
+}
+```
+
+**Auto-Reply Bot** (`functions/whatsapp.js:100-136`):
+- **Active Hours**: 8 PM to 7 AM (Colombia time)
+- **Cooldown**: 12 hours between auto-replies to same user
+- **Message**: "Nuestro equipo descansa en este momento..."
+
+```javascript
+const bogotaHour = parseInt(now.toLocaleString("en-US", {
+    timeZone: "America/Bogota", 
+    hour: "numeric", 
+    hour12: false
+}));
+
+const isOutOfOffice = bogotaHour >= 20 || bogotaHour < 7;
+```
+
+**Media Handling** (`functions/whatsapp.js:40-62`):
+- Downloads images, audio from Meta API
+- Uploads to Firebase Storage
+- Makes files public and stores URL in Firestore
+
+### Send Message
+
+**Function**: `sendWhatsappMessage`
+- **Type**: Callable Function
+- **File**: `functions/whatsapp.js:176`
+- **Purpose**: Admin panel sends messages to customers
+
+```javascript
+exports.sendMessage = onCall(async (request) => {
+    const { phoneNumber, message, type, mediaUrl } = request.data;
+    const waId = await sendToMeta(phoneNumber, message, type, mediaUrl);
+    // Save to Firestore...
+});
+```
+
+## Google Merchant Feed
+
+**Function**: `generateProductFeed`
+- **Type**: HTTPS Request
+- **File**: `functions/google-merchant.js:32`
+- **Endpoint**: Public XML feed for Google Shopping
+
+**Features**:
+- **Delta Caching**: Only regenerates changed products (`functions/google-merchant.js:65-67`)
+- **Variant Support**: Creates separate entries for color/capacity combinations
+- **Stock Sync**: Reports exact inventory with `<g:sell_on_google_quantity>` (`functions/google-merchant.js:152`)
+- **Promotion Handling**: Includes sale dates and pricing (`functions/google-merchant.js:95-101`)
+- **Shipping Calculation**: Auto-applies free shipping threshold
+
+**Cache Strategy** (`functions/google-merchant.js:50-62`):
+```javascript
+const cacheSnap = await cacheRef.get();
+if (cacheSnap.exists && req.query.rebuild !== 'true') {
+    xmlMap = data.xmlMap || {};
+    lastGenerated = data.lastGenerated || 0;
+}
+
+const changedSnap = await db.collection('products')
+    .where('updatedAt', '>', new Date(lastGenerated))
+    .get();
+```
+
+**Force Rebuild**: `?rebuild=true` query parameter
+
+## Sitemap Generation
+
+**Function**: `sitemap`
+- **Type**: HTTPS Request
+- **File**: `functions/sitemap.js:21`
+- **Purpose**: Dynamic XML sitemap for SEO
+
+**Includes**:
+1. Static pages (homepage, catalog, search)
+2. All categories with encoded URLs
+3. All active products with last modification dates
+
+```javascript
+const sitemapXml = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${urls}
+</urlset>`;
+
+res.set('Cache-Control', 'public, max-age=3600, s-maxage=7200');
+```
+
+## Product Sync Utilities
+
+**Function**: `touchProductTimestamp`
+- **Type**: Firestore Trigger (onWrite)
+- **File**: `functions/sync.js:8`
+- **Purpose**: Auto-updates `last_updated` timestamp on product changes
+
+**Infinite Loop Prevention** (`functions/sync.js:16-19`):
+```javascript
+if (newData.last_updated && 
+    newData.last_updated.toMillis() > now.toMillis() - 10000) {
+    return; // Skip if updated in last 10 seconds
+}
+```
+
+## Deployment
+
+### Environment Variables
+
+Required `.env` configuration:
+
+```bash
+# MercadoPago
+MP_ACCESS_TOKEN=your_token
+
+# ADDI
+ADDI_CLIENT_ID=your_client_id
+ADDI_CLIENT_SECRET=your_secret
+
+# Sistecrédito
+SC_API_KEY=your_api_key
+SC_APP_KEY=your_app_key
+SC_APP_TOKEN=your_token
+
+# Email
+SMTP_HOST=smtp.example.com
+SMTP_PORT=465
+SMTP_EMAIL=orders@pixeltechcol.com
+SMTP_PASSWORD=your_password
+
+# WhatsApp
+WHATSAPP_VERIFY_TOKEN=your_verify_token
+WHATSAPP_API_TOKEN=your_api_token
+WHATSAPP_PHONE_ID=your_phone_id
+```
+
+### Deploy Commands
+
+```bash
+# Deploy all functions
+firebase deploy --only functions
+
+# Deploy specific function
+firebase deploy --only functions:mercadoPagoWebhook
+
+# Deploy with env vars
+firebase functions:config:set somekey="somevalue"
+```
+
+### Testing Locally
+
+```bash
+# Start emulator suite
+firebase emulators:start
+
+# Test callable function
+const result = await firebase.functions().httpsCallable('createCODOrder')(data);
+
+# Test webhook with curl
+curl -X POST https://localhost:5001/PROJECT_ID/us-central1/mercadoPagoWebhook \
+  -H "Content-Type: application/json" \
+  -d '{"id": "12345"}'
+```
+
+## Common Patterns
+
+### Inventory Management
+
+All payment webhooks follow this pattern for stock deduction:
+
+```javascript
+await db.runTransaction(async (t) => {
+    // 1. Check if already processed
+    if (oData.paymentStatus === 'PAID') return;
+    
+    // 2. Deduct stock
+    for (const i of oData.items) {
+        const pDoc = await t.get(pRef);
+        let newStock = pData.stock - i.quantity;
+        
+        // Handle variants
+        if (i.color || i.capacity) {
+            const idx = combos.findIndex(c => 
+                c.color === i.color && c.capacity === i.capacity
+            );
+            combos[idx].stock -= i.quantity;
+        }
+        
+        t.update(pRef, { stock: newStock, combinations: combos });
+    }
+    
+    // 3. Update treasury
+    t.update(accountRef, { balance: increment });
+    
+    // 4. Create remission
+    t.set(remissionRef, remissionData);
+    
+    // 5. Mark as paid
+    t.update(orderRef, { status: 'PAGADO', paymentStatus: 'PAID' });
+});
+```
+
+### Error Handling
+
+```javascript
+try {
+    // Function logic
+} catch (error) {
+    console.error("Error context:", error);
+    throw new functions.https.HttpsError('internal', error.message);
+}
+```
+
+## Monitoring
+
+### Firebase Console
+
+- **Logs**: Firebase Console → Functions → Logs
+- **Metrics**: Request count, execution time, error rate
+- **Alerts**: Configure alerts for error thresholds
+
+### Key Metrics to Monitor
+
+1. **Webhook Success Rate**: Should be >99%
+2. **Email Delivery**: Track `confirmationEmailSent` and `dispatchEmailSent` flags
+3. **Scheduler Execution**: Check daily logs for `processScheduledTransfers`
+4. **Feed Generation Time**: Should be under 5 seconds with caching
+
+## Security Best Practices
+
+1. **Authentication**: All callable functions verify `context.auth` or validate Firebase tokens
+2. **Webhook Validation**: MercadoPago payments verified against API before processing
+3. **Price Validation**: Always fetch real prices from Firestore, never trust client data
+4. **Duplicate Prevention**: Check `paymentStatus` before processing webhooks
+5. **Transaction Safety**: Use Firestore transactions for inventory updates

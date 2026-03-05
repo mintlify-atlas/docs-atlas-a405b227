@@ -1,0 +1,367 @@
+---
+title: 'Scheduled Functions'
+description: 'Automated maintenance tasks for order cleanup, transfers, and promotions'
+icon: 'clock'
+---
+
+## Overview
+
+Scheduled Cloud Functions run periodically to maintain data integrity, process automated transfers, cancel expired orders, and deactivate expired promotions.
+
+## Function: processScheduledTransfers
+
+Processes automated account transfers between treasury accounts.
+
+**Location**: `scheduler.js:11-115`
+
+**Schedule**: Daily at 12:05 AM (Colombia time)
+
+```javascript
+exports.processScheduledTransfers = onSchedule({
+    schedule: "5 0 * * *",
+    timeZone: "America/Bogota"
+}, async (event) => {
+    // Implementation
+});
+```
+
+### How It Works
+
+<Steps>
+  <Step title="Query Pending Transfers">
+    Find all transfers with `status: 'PENDING'` and `scheduledDate <= now`
+  </Step>
+  <Step title="Process Each Transfer">
+    For each transfer, execute an atomic transaction:
+    - Deduct from source account
+    - Credit to target account
+    - Mark transfer as `COMPLETED`
+    - Create income/expense records
+  </Step>
+  <Step title="Handle Failures">
+    Mark failed transfers as `FAILED` with error message
+  </Step>
+</Steps>
+
+### Implementation
+
+**From `scheduler.js:17-115`:**
+
+```javascript
+const snapshot = await db.collection('scheduled_transfers')
+    .where('status', '==', 'PENDING')
+    .where('scheduledDate', '<=', admin.firestore.Timestamp.now())
+    .get();
+
+const promises = snapshot.docs.map(async (docSnap) => {
+    const transfer = docSnap.data();
+    
+    try {
+        await db.runTransaction(async (t) => {
+            // Read accounts
+            const sourceRef = db.collection('accounts').doc(transfer.sourceAccountId);
+            const targetRef = db.collection('accounts').doc(transfer.targetAccountId);
+            const sourceDoc = await t.get(sourceRef);
+            const targetDoc = await t.get(targetRef);
+            
+            if (!sourceDoc.exists || !targetDoc.exists) {
+                throw new Error("Account not found");
+            }
+            
+            // Move money
+            const amount = Number(transfer.amount);
+            const newSourceBalance = (sourceDoc.data().balance || 0) - amount;
+            const newTargetBalance = (targetDoc.data().balance || 0) + amount;
+            
+            // Update accounts
+            t.update(sourceRef, { balance: newSourceBalance });
+            t.update(targetRef, { balance: newTargetBalance });
+            
+            // Mark transfer as completed
+            t.update(db.collection('scheduled_transfers').doc(transferId), {
+                status: 'COMPLETED',
+                executedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+            
+            // Create expense records
+            const outRef = db.collection('expenses').doc();
+            t.set(outRef, {
+                description: transfer.description,
+                amount: amount,
+                category: "Transferencia Saliente (Auto)",
+                paymentMethod: sourceDoc.data().name,
+                date: admin.firestore.FieldValue.serverTimestamp()
+            });
+            
+            const inRef = db.collection('expenses').doc();
+            t.set(inRef, {
+                description: transfer.description,
+                amount: amount,
+                category: "Transferencia Entrante (Auto)",
+                paymentMethod: targetDoc.data().name,
+                date: admin.firestore.FieldValue.serverTimestamp()
+            });
+        });
+    } catch (err) {
+        // Mark as failed
+        await db.collection('scheduled_transfers').doc(transferId).update({
+            status: 'FAILED',
+            error: err.message
+        });
+    }
+});
+
+await Promise.all(promises);
+```
+
+### Transfer Document Schema
+
+```javascript
+{
+    sourceAccountId: 'account-id-1',
+    targetAccountId: 'account-id-2',
+    amount: 500000,
+    description: 'Transferencia ADDI a Bancolombia',
+    scheduledDate: Timestamp,
+    status: 'PENDING',  // or COMPLETED, FAILED
+    executedAt: Timestamp,
+    error: 'Optional error message'
+}
+```
+
+---
+
+## Function: cleanupOldOrders
+
+Deletes old abandoned orders to reduce database size.
+
+**Location**: `scheduler.js:117-151`
+
+**Schedule**: Every 24 hours
+
+```javascript
+exports.cleanupOldOrders = onSchedule("every 24 hours", async (event) => {
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    
+    const snapshot = await db.collection('orders')
+        .where('createdAt', '<', sevenDaysAgo)
+        .where('status', 'in', ['PENDIENTE_PAGO', 'RECHAZADO', 'CANCELADO'])
+        .get();
+    
+    if (snapshot.empty) {
+        console.log('✅ No hay órdenes antiguas para borrar.');
+        return;
+    }
+    
+    const batch = db.batch();
+    snapshot.docs.forEach(doc => batch.delete(doc.ref));
+    await batch.commit();
+    
+    console.log(`🗑️ Se eliminaron ${snapshot.size} órdenes basura.`);
+});
+```
+
+### Cleanup Criteria
+
+<ParamField body="Age" type="condition">
+  Orders older than **7 days**
+</ParamField>
+
+<ParamField body="Status" type="array">
+  Only deletes orders with status:
+  - `PENDIENTE_PAGO` (never paid)
+  - `RECHAZADO` (payment rejected)
+  - `CANCELADO` (expired or admin cancelled)
+</ParamField>
+
+<Info>
+Paid orders (`PAGADO`, `DESPACHADO`, `ENTREGADO`) are **never** deleted automatically.
+</Info>
+
+---
+
+## Function: cancelAbandonedPayments
+
+Cancels orders that remain unpaid after payment link expires.
+
+**Location**: `scheduler.js:157-211`
+
+**Schedule**: Every 15 minutes
+
+```javascript
+exports.cancelAbandonedPayments = onSchedule({
+    schedule: "every 15 minutes",
+    timeZone: "America/Bogota"
+}, async (event) => {
+    const timeout = new Date();
+    timeout.setMinutes(timeout.getMinutes() - 35);
+    
+    const snapshot = await db.collection('orders')
+        .where('status', '==', 'PENDIENTE_PAGO')
+        .where('createdAt', '<=', admin.firestore.Timestamp.fromDate(timeout))
+        .get();
+    
+    const batch = db.batch();
+    snapshot.docs.forEach(doc => {
+        if (doc.data().paymentStatus !== 'PAID') {
+            batch.update(doc.ref, {
+                status: 'CANCELADO',
+                statusDetail: 'expired_by_system',
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                notes: "[Sistema: Cancelado por inactividad de pago]"
+            });
+        }
+    });
+    
+    await batch.commit();
+});
+```
+
+### Timeout Logic
+
+<Steps>
+  <Step title="Calculate Timeout">
+    Current time minus **35 minutes** (gives 5-minute grace period over MercadoPago's 30-minute expiration)
+  </Step>
+  <Step title="Query Old Orders">
+    Find orders with `status === 'PENDIENTE_PAGO'` created before timeout
+  </Step>
+  <Step title="Verify Not Paid">
+    Double-check `paymentStatus !== 'PAID'` to avoid race condition with webhooks
+  </Step>
+  <Step title="Mark as Cancelled">
+    Update status to `CANCELADO` with system note
+  </Step>
+</Steps>
+
+<Warning>
+This function does **not** restore inventory. For COD orders (which deduct stock immediately), manual intervention is required.
+</Warning>
+
+---
+
+## Function: checkExpiredPromotions
+
+Deactivates product promotions that have passed their end date.
+
+**Location**: `scheduler.js:217-264`
+
+**Schedule**: Every 60 minutes
+
+```javascript
+exports.checkExpiredPromotions = onSchedule({
+    schedule: "every 60 minutes",
+    timeZone: "America/Bogota"
+}, async (event) => {
+    const now = admin.firestore.Timestamp.now();
+    
+    const snapshot = await db.collection('products')
+        .where('promoEndsAt', '<=', now)
+        .get();
+    
+    if (snapshot.empty) {
+        console.log('✅ No hay promociones vencidas.');
+        return;
+    }
+    
+    const batch = db.batch();
+    snapshot.docs.forEach(doc => {
+        const p = doc.data();
+        
+        if (p.originalPrice && p.originalPrice > 0) {
+            batch.update(doc.ref, {
+                price: p.originalPrice,      // Restore original price
+                originalPrice: 0,             // Clear promo price
+                promoEndsAt: null             // Remove expiration
+            });
+        }
+    });
+    
+    await batch.commit();
+    console.log(`🏷️ Desactivadas ${snapshot.size} ofertas vencidas.`);
+});
+```
+
+### Promotion Schema
+
+Products with active promotions have:
+
+```javascript
+{
+    price: 3500000,           // Current discounted price
+    originalPrice: 4500000,   // Price before discount
+    promoEndsAt: Timestamp    // When to restore originalPrice
+}
+```
+
+### Restoration Logic
+
+1. Query products where `promoEndsAt <= now`
+2. For each product with `originalPrice > 0`:
+   - Set `price = originalPrice`
+   - Set `originalPrice = 0`
+   - Set `promoEndsAt = null`
+3. Batch commit all changes
+
+<Info>
+The SmartProductSync system automatically detects these price changes via `onSnapshot` and updates the frontend catalog in real-time.
+</Info>
+
+---
+
+## Scheduler Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Transactions" icon="database">
+    Always use Firestore transactions when moving money or updating related documents
+  </Card>
+  <Card title="Handle Failures Gracefully" icon="circle-exclamation">
+    Log errors and mark failed operations for manual review
+  </Card>
+  <Card title="Batch Operations" icon="layer-group">
+    Use batch writes for multiple independent updates (max 500 per batch)
+  </Card>
+  <Card title="Set Reasonable Intervals" icon="timer">
+    Balance between timely execution and cost (Firebase charges per invocation)
+  </Card>
+</CardGroup>
+
+## Monitoring Scheduled Functions
+
+### View Logs
+
+```bash
+firebase functions:log --only processScheduledTransfers
+```
+
+### Check Execution History
+
+In Firebase Console:
+1. Go to **Functions** tab
+2. Select function name
+3. View **Logs** and **Health** tabs
+
+### Set Up Alerts
+
+Configure Cloud Monitoring alerts for:
+- Function execution failures
+- Abnormally long execution times
+- High error rates
+
+## Cron Expression Reference
+
+| Expression | Description |
+|------------|-------------|
+| `5 0 * * *` | Daily at 12:05 AM |
+| `0 */6 * * *` | Every 6 hours |
+| `every 15 minutes` | Every 15 minutes |
+| `every 24 hours` | Once per day |
+| `0 9 * * 1` | Every Monday at 9 AM |
+
+## Related Documentation
+
+- [Order Functions](/api/orders)
+- [Payment Functions](/api/payments)
+- [Collections: Orders](/api/collections/orders)
+- [Collections: Products](/api/collections/products)

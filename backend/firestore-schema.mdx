@@ -1,0 +1,738 @@
+---
+title: Firestore Database Schema
+description: Complete Firestore collections and document schemas for PixelTech Colombia
+---
+
+## Overview
+
+PixelTech Colombia uses Cloud Firestore as its primary database. The schema is designed for an e-commerce platform with inventory management, order processing, customer management, and accounting features.
+
+## Collections Structure
+
+```
+firestore/
+├── users/{userId}
+│   └── addresses/{addressId}
+├── products/{productId}
+│   └── history/{historyId}
+├── categories/{categoryId}
+├── brands/{brandId}
+├── orders/{orderId}
+├── remissions/{remissionId}
+├── warranties/{warrantyId}
+├── warranty_inventory/{itemId}
+├── suppliers/{supplierId}
+├── purchases/{purchaseId}
+├── carts/{cartId}
+├── expenses/{expenseId}
+├── expenses_trash/{trashId}
+├── accounts/{accountId}
+├── payables/{payableId}
+├── scheduled_transfers/{transferId}
+├── chats/{chatId}
+│   └── messages/{messageId}
+├── config/{configDoc}
+└── merchant_feed_cache (singleton)
+```
+
+## Core Collections
+
+### Products
+
+**Collection**: `products`
+
+Main product catalog with support for simple products and variants.
+
+#### Simple Product Schema
+
+```typescript
+{
+  id: string;                    // Auto-generated document ID
+  name: string;                  // Product name
+  description: string;           // HTML description
+  category: string;              // Category name
+  subcategory?: string;          // Optional subcategory
+  brand: string;                 // Brand name
+  
+  // Pricing
+  price: number;                 // Current price in COP
+  originalPrice?: number;        // Original price (if on sale)
+  promoEndsAt?: Timestamp;       // Promotion end date
+  
+  // Inventory
+  stock: number;                 // Available quantity
+  sku?: string;                  // SKU/EAN code
+  
+  // Product Type
+  isSimple: boolean;             // true for simple products
+  combinations?: [];             // Empty for simple products
+  
+  // Media
+  mainImage: string;             // Primary image URL
+  images: string[];              // Additional images
+  colorImages?: {};              // Empty for simple products
+  
+  // Status & Metadata
+  status: 'active' | 'draft';    // Visibility status
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+  last_updated: Timestamp;       // Sync timestamp
+  
+  // Marketing
+  isNewLaunch?: boolean;         // Badge: New
+  isHeroPromo?: boolean;         // Featured promotion
+}
+```
+
+#### Product with Variants Schema
+
+```typescript
+{
+  // ... all fields from simple product
+  
+  isSimple: false;               // false for variant products
+  
+  combinations: [
+    {
+      color: string;             // e.g., "Negro", "Blanco"
+      capacity: string;          // e.g., "64GB", "128GB"
+      price: number;             // Variant-specific price
+      stock: number;             // Variant-specific stock
+      sku?: string;              // Variant-specific SKU/EAN
+    }
+  ],
+  
+  colorImages: {
+    "Negro": ["url1", "url2"],   // Images per color
+    "Blanco": ["url3", "url4"]
+  }
+}
+```
+
+**Example**: iPhone Product (`functions/mercadopago.js:224-236`)
+
+```javascript
+// Order item with variant
+{
+  id: "iphone15pro",
+  name: "iPhone 15 Pro",
+  price: 4500000,
+  quantity: 1,
+  color: "Titanio Negro",
+  capacity: "256GB",
+  mainImage: "https://..."
+}
+
+// Stock deduction logic finds matching combination
+const idx = combinations.findIndex(c => 
+  c.color === "Titanio Negro" && c.capacity === "256GB"
+);
+combinations[idx].stock -= 1;
+```
+
+#### Subcollection: Product History
+
+**Collection**: `products/{productId}/history`
+
+Tracks inventory changes and price modifications (admin only).
+
+### Orders
+
+**Collection**: `orders`
+
+Customer orders from all sources.
+
+```typescript
+{
+  id: string;                    // Auto-generated
+  
+  // Source
+  source: 'TIENDA_WEB' | 'ADMIN_PANEL';
+  
+  // Customer Info
+  userId: string;                // Firebase Auth UID or 'GUEST_MP'
+  userEmail: string;
+  userName: string;
+  phone: string;
+  clientDoc: string;             // ID number (cedula)
+  
+  // Shipping
+  shippingData: {
+    address: string;
+    city: string;
+    department: string;
+    phone?: string;
+    notes?: string;
+  };
+  
+  // Billing (optional)
+  billingData?: {
+    businessName: string;
+    nit: string;
+    email: string;
+  };
+  requiresInvoice: boolean;
+  
+  // Items
+  items: [
+    {
+      id: string;                // Product ID
+      name: string;
+      price: number;             // Price at purchase time
+      quantity: number;
+      color?: string;
+      capacity?: string;
+      mainImage: string;
+    }
+  ],
+  
+  // Totals
+  subtotal: number;              // Sum of item prices
+  shippingCost: number;
+  total: number;                 // subtotal + shippingCost
+  
+  // Payment
+  paymentMethod: 'MERCADOPAGO' | 'ADDI' | 'SISTECREDITO' | 'CONTRAENTREGA';
+  paymentStatus: 'PENDING' | 'PAID' | 'FAILED';
+  paymentId?: string;            // External payment ID
+  paymentAccountId?: string;     // Treasury account ID
+  paymentMethodName?: string;    // Display name
+  
+  // Status
+  status: 'PENDIENTE_PAGO' | 'PAGADO' | 'PENDIENTE' | 'DESPACHADO' | 
+          'EN_RUTA' | 'ENTREGADO' | 'CANCELADO' | 'RECHAZADO';
+  statusDetail?: string;         // Rejection reason
+  
+  // Logistics
+  trackingNumber?: string;       // Shipping guide number
+  carrier?: string;              // e.g., "Servientrega"
+  
+  // Inventory
+  isStockDeducted: boolean;      // Prevents double deduction
+  
+  // Timestamps
+  createdAt: Timestamp;
+  updatedAt?: Timestamp;
+  
+  // Notifications
+  confirmationEmailSent?: boolean;
+  dispatchEmailSent?: boolean;
+  
+  // Legacy
+  buyerInfo?: {                  // Deprecated, use root fields
+    name: string;
+    email: string;
+    phone: string;
+  };
+}
+```
+
+**Status Flow**:
+
+1. **PENDIENTE_PAGO**: Awaiting payment (MercadoPago, ADDI, Sistecrédito)
+2. **PAGADO**: Payment confirmed, stock deducted
+3. **PENDIENTE**: Ready for fulfillment (COD orders start here)
+4. **DESPACHADO**: Shipped to carrier
+5. **EN_RUTA**: In transit
+6. **ENTREGADO**: Delivered to customer
+7. **CANCELADO**: Cancelled by customer/system
+8. **RECHAZADO**: Payment rejected
+
+### Users
+
+**Collection**: `users`
+
+Customer accounts and profiles.
+
+```typescript
+{
+  id: string;                    // Same as Firebase Auth UID
+  email: string;
+  displayName: string;
+  photoURL?: string;
+  phoneNumber?: string;
+  
+  role: 'customer' | 'admin';
+  
+  createdAt: Timestamp;
+  lastLogin?: Timestamp;
+  
+  // Preferences
+  newsletter?: boolean;
+}
+```
+
+#### Subcollection: Addresses
+
+**Collection**: `users/{userId}/addresses`
+
+```typescript
+{
+  id: string;
+  label: string;                 // e.g., "Casa", "Oficina"
+  address: string;
+  city: string;
+  department: string;
+  postalCode?: string;
+  isDefault: boolean;
+  createdAt: Timestamp;
+}
+```
+
+### Categories
+
+**Collection**: `categories`
+
+```typescript
+{
+  id: string;
+  name: string;                  // e.g., "Smartphones"
+  slug: string;                  // URL-friendly name
+  description?: string;
+  image?: string;                // Category banner
+  order: number;                 // Display order
+  isActive: boolean;
+}
+```
+
+### Brands
+
+**Collection**: `brands`
+
+```typescript
+{
+  id: string;
+  name: string;                  // e.g., "Samsung"
+  logo?: string;
+  isActive: boolean;
+}
+```
+
+### Remissions
+
+**Collection**: `remissions`
+
+Picking/packing documents for warehouse operations.
+
+```typescript
+{
+  id: string;                    // Same as order ID
+  orderId: string;
+  source: 'WEBHOOK_MP' | 'WEBHOOK_ADDI' | 'WEBHOOK_SISTECREDITO' | 'TIENDA_WEB';
+  
+  // Customer
+  clientName: string;
+  clientPhone: string;
+  clientDoc: string;
+  clientAddress: string;         // Formatted: "address, city"
+  
+  // Items (same as order)
+  items: Array<OrderItem>;
+  total: number;
+  
+  // Status
+  status: 'PENDIENTE_ALISTAMIENTO' | 'EN_ALISTAMIENTO' | 'LISTO' | 'DESPACHADO';
+  type: 'VENTA_WEB' | 'VENTA_TIENDA';
+  
+  createdAt: Timestamp;
+}
+```
+
+**Created by**: Payment webhooks (`functions/mercadopago.js:286-293`)
+
+### Warranties
+
+**Collection**: `warranties`
+
+Customer warranty claims.
+
+```typescript
+{
+  id: string;
+  userId: string;
+  
+  // Product Info
+  productName: string;
+  productBrand: string;
+  serialNumber?: string;
+  purchaseDate: Timestamp;
+  purchaseProof?: string;        // Receipt image URL
+  
+  // Issue
+  issueDescription: string;
+  issueImages?: string[];        // Up to 3 images
+  
+  // Status
+  status: 'PENDING' | 'IN_REVIEW' | 'APPROVED' | 'REJECTED' | 'COMPLETED';
+  adminNotes?: string;
+  resolution?: string;
+  
+  createdAt: Timestamp;
+  updatedAt?: Timestamp;
+}
+```
+
+## Business Collections
+
+### Suppliers
+
+**Collection**: `suppliers`
+
+```typescript
+{
+  id: string;
+  name: string;
+  nit: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  isActive: boolean;
+  createdAt: Timestamp;
+}
+```
+
+### Expenses
+
+**Collection**: `expenses`
+
+Accounting transactions (income and expenses).
+
+```typescript
+{
+  id: string;
+  
+  // Transaction
+  amount: number;
+  category: string;              // e.g., "Ingreso Ventas Online"
+  description: string;
+  paymentMethod: string;         // Account name
+  
+  // Type
+  type: 'INCOME' | 'EXPENSE' | 'TRANSFER';
+  
+  // Relations
+  orderId?: string;              // Link to order
+  supplierName?: string;         // Supplier or customer name
+  
+  // Timestamps
+  date: Timestamp;               // Transaction date
+  createdAt: Timestamp;          // Record creation
+}
+```
+
+**Example**: Income from MercadoPago (`functions/mercadopago.js:267-275`)
+
+```javascript
+db.collection('expenses').add({
+  amount: 150000,
+  category: "Ingreso Ventas Online",
+  description: "Venta MP #abc12345",
+  paymentMethod: "MercadoPago",
+  type: 'INCOME',
+  orderId: "abc12345...",
+  supplierName: "Juan Pérez",
+  date: serverTimestamp(),
+  createdAt: serverTimestamp()
+});
+```
+
+### Accounts
+
+**Collection**: `accounts`
+
+Treasury accounts (bank accounts, payment gateways).
+
+```typescript
+{
+  id: string;
+  name: string;                  // e.g., "MercadoPago", "Bancolombia"
+  type: 'BANK' | 'CASH' | 'GATEWAY';
+  balance: number;               // Current balance
+  
+  // Gateway Link
+  gatewayLink?: 'MERCADOPAGO' | 'ADDI' | 'SISTECREDITO';
+  
+  // Flags
+  isDefaultOnline?: boolean;     // Default for online payments
+  isActive: boolean;
+  
+  createdAt: Timestamp;
+}
+```
+
+**Balance Updates**: Automatic via payment webhooks (`functions/mercadopago.js:261`)
+
+### Scheduled Transfers
+
+**Collection**: `scheduled_transfers`
+
+Automatic bank transfers between accounts.
+
+```typescript
+{
+  id: string;
+  
+  sourceAccountId: string;
+  targetAccountId: string;
+  amount: number;
+  description: string;
+  
+  // Schedule
+  scheduledDate: Timestamp;      // When to execute
+  
+  // Status
+  status: 'PENDING' | 'COMPLETED' | 'FAILED';
+  executedAt?: Timestamp;
+  error?: string;
+  
+  createdAt: Timestamp;
+}
+```
+
+**Processed by**: `processScheduledTransfers` scheduler (`functions/scheduler.js:11`)
+
+## Communication Collections
+
+### Chats
+
+**Collection**: `chats`
+
+WhatsApp conversation threads.
+
+```typescript
+{
+  id: string;                    // Phone number (e.g., "573001234567")
+  phoneNumber: string;
+  clientName: string;            // From WhatsApp profile
+  
+  // Status
+  status: 'open' | 'closed';
+  unread: boolean;               // Has unread messages
+  
+  // Last Message
+  lastMessage: string;           // Preview text
+  lastMessageAt: Timestamp;
+  lastCustomerInteraction: Timestamp;
+  
+  // Bot
+  lastAutoReply?: Timestamp;     // Last auto-reply sent
+  
+  platform: 'whatsapp';
+}
+```
+
+#### Subcollection: Messages
+
+**Collection**: `chats/{chatId}/messages`
+
+```typescript
+{
+  id: string;
+  
+  type: 'incoming' | 'outgoing';
+  content: string;               // Message text
+  
+  // Media
+  messageType: 'text' | 'image' | 'audio';
+  mediaUrl?: string;             // Firebase Storage URL
+  
+  // Meta
+  whatsappId: string;            // Meta message ID
+  isAutoReply?: boolean;         // Bot-generated
+  
+  timestamp: Timestamp;
+}
+```
+
+**Created by**: `whatsappWebhook` (`functions/whatsapp.js:160-167`)
+
+## Configuration Collections
+
+### Config
+
+**Collection**: `config`
+
+Singleton documents for site-wide settings.
+
+#### Shipping Config
+
+**Document**: `config/shipping`
+
+```typescript
+{
+  defaultPrice: number;          // Default shipping cost
+  freeThreshold: number;         // Free shipping over this amount
+  carriers: [
+    {
+      name: string;              // e.g., "Servientrega"
+      trackingUrl: string;
+      isActive: boolean;
+    }
+  ]
+}
+```
+
+#### Merchant Feed Cache
+
+**Document**: `config/merchant_feed_cache`
+
+Google Merchant Center feed cache.
+
+```typescript
+{
+  xmlMap: {
+    [productId: string]: string  // Pre-rendered XML blocks
+  },
+  lastGenerated: number;         // Unix timestamp (ms)
+}
+```
+
+**Updated by**: `generateProductFeed` (`functions/google-merchant.js:201-204`)
+
+## Indexes
+
+**File**: `firestore.indexes.json`
+
+```json
+{
+  "indexes": [],
+  "fieldOverrides": []
+}
+```
+
+**Note**: Currently using single-field indexes (automatic). Composite indexes will be added as needed based on query requirements.
+
+### Recommended Composite Indexes
+
+These should be added to `firestore.indexes.json` for optimal performance:
+
+```json
+{
+  "indexes": [
+    {
+      "collectionGroup": "orders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "orders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "userId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "products",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "scheduled_transfers",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "scheduledDate", "order": "ASCENDING" }
+      ]
+    }
+  ]
+}
+```
+
+## Data Consistency
+
+### Timestamps
+
+All collections use server-side timestamps:
+
+```javascript
+import { serverTimestamp } from 'firebase/firestore';
+
+{
+  createdAt: serverTimestamp(),
+  updatedAt: serverTimestamp()
+}
+```
+
+### Transactions
+
+Critical operations use Firestore transactions:
+
+```javascript
+// Payment webhook (functions/mercadopago.js:205-305)
+await db.runTransaction(async (t) => {
+  // 1. Read phase
+  const orderSnap = await t.get(orderRef);
+  const productSnap = await t.get(productRef);
+  
+  // 2. Write phase
+  t.update(productRef, { stock: newStock });
+  t.update(accountRef, { balance: newBalance });
+  t.set(remissionRef, data);
+  t.update(orderRef, { status: 'PAGADO' });
+});
+```
+
+### Cascade Deletes
+
+No automatic cascade deletes. Manual cleanup required:
+
+```javascript
+// Delete product and its history
+const historySnap = await db
+  .collection(`products/${productId}/history`)
+  .get();
+
+const batch = db.batch();
+historySnap.forEach(doc => batch.delete(doc.ref));
+batch.delete(productRef);
+await batch.commit();
+```
+
+## Best Practices
+
+### 1. Document Size
+
+- Keep documents under 1MB
+- Use subcollections for large datasets (e.g., chat messages)
+- Paginate large arrays (e.g., order history)
+
+### 2. Query Optimization
+
+```javascript
+// ✅ Good: Limited query
+const recent = await db.collection('orders')
+  .where('status', '==', 'PAGADO')
+  .orderBy('createdAt', 'desc')
+  .limit(20)
+  .get();
+
+// ❌ Bad: Unbounded query
+const all = await db.collection('orders').get();
+```
+
+### 3. Security
+
+See [Security Rules](./security-rules) for comprehensive access control.
+
+### 4. Real-time vs. Get
+
+```javascript
+// Real-time updates (admin panel)
+const unsubscribe = db.collection('orders')
+  .where('status', '==', 'PENDIENTE')
+  .onSnapshot(snapshot => {
+    // Update UI
+  });
+
+// One-time read (Cloud Functions)
+const snapshot = await db.collection('orders')
+  .doc(orderId)
+  .get();
+```

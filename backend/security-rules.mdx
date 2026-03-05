@@ -1,0 +1,619 @@
+---
+title: Firestore Security Rules
+description: Database access control and validation rules for PixelTech Colombia
+---
+
+## Overview
+
+Firestore Security Rules control read/write access to all collections. The rules are defined in `firestore.rules` and deployed alongside the database schema.
+
+**File**: `firestore.rules`
+
+## Helper Functions
+
+Three utility functions are defined at the root level for reusability (`firestore.rules:7-19`):
+
+### isAdmin()
+
+Checks if the authenticated user has admin role.
+
+```javascript
+function isAdmin() {
+  return request.auth != null && 
+    exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+    get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+}
+```
+
+**Logic**:
+1. User must be authenticated (`request.auth != null`)
+2. User document must exist in `users` collection
+3. User's `role` field must equal `'admin'`
+
+**Usage**: Protects admin-only operations like product creation, price changes, and financial records.
+
+### isOwner(userId)
+
+Checks if the authenticated user matches the specified user ID.
+
+```javascript
+function isOwner(userId) {
+  return request.auth != null && request.auth.uid == userId;
+}
+```
+
+**Parameters**:
+- `userId`: The user ID to compare against (usually from document path or data)
+
+**Usage**: Ensures users can only access their own data (orders, addresses, warranties).
+
+### isAuthenticated()
+
+Checks if any user is authenticated.
+
+```javascript
+function isAuthenticated() {
+  return request.auth != null;
+}
+```
+
+**Usage**: Basic authentication requirement for operations like cart management.
+
+## Collection Rules
+
+### Users
+
+**Path**: `users/{userId}` (`firestore.rules:24-30`)
+
+```javascript
+match /users/{userId} {
+  allow read, write: if isOwner(userId) || isAdmin();
+  
+  match /addresses/{addressId} {
+    allow read, write: if isOwner(userId) || isAdmin();
+  }
+}
+```
+
+**Access Control**:
+- **Read**: User can read their own profile OR admin
+- **Write**: User can update their own profile OR admin
+- **Addresses subcollection**: Same rules as parent
+
+**Use Cases**:
+- Customer updates profile information
+- Customer manages delivery addresses
+- Admin views/edits any user account
+
+### Products
+
+**Path**: `products/{productId}` (`firestore.rules:33-50`)
+
+```javascript
+match /products/{productId} {
+  allow read: if true;
+  allow create, delete: if isAdmin();
+  
+  // Admin can change everything including prices
+  allow update: if isAdmin();
+
+  // Authenticated users can ONLY update stock, combinations, and updatedAt
+  allow update: if isAuthenticated() && 
+    request.resource.data.diff(resource.data).affectedKeys()
+    .hasOnly(['stock', 'combinations', 'updatedAt']);
+
+  match /history/{historyId} {
+    allow read, write: if isAdmin();
+  }
+}
+```
+
+**Access Control**:
+- **Read**: Public (anyone can view products)
+- **Create/Delete**: Admin only
+- **Update**: Two rules (evaluated with OR logic):
+  1. **Admin**: Can change any field (prices, descriptions, images, etc.)
+  2. **Authenticated Users**: Can ONLY modify `stock`, `combinations`, and `updatedAt`
+
+**Security Design**:
+
+The dual update rule allows Cloud Functions to deduct inventory after payment without admin privileges:
+
+```javascript
+// ✅ Allowed: Payment webhook updating stock (functions/mercadopago.js:282)
+t.update(productRef, { 
+  stock: newStock, 
+  combinations: updatedCombos,
+  updatedAt: serverTimestamp() 
+});
+
+// ❌ Blocked: Client attempting to change price
+await updateDoc(productRef, { price: 0 }); 
+// Error: Missing or insufficient permissions
+```
+
+**Field Validation**:
+
+The `diff()` method compares the incoming document with the existing one:
+
+```javascript
+request.resource.data.diff(resource.data).affectedKeys()
+```
+
+Returns an array of changed field names. `.hasOnly(['stock', 'combinations', 'updatedAt'])` ensures no other fields were modified.
+
+### Categories & Brands
+
+**Paths**: `categories/{catId}`, `brands/{brandId}` (`firestore.rules:53-61`)
+
+```javascript
+match /categories/{catId} {
+  allow read: if true;
+  allow write: if isAdmin();
+}
+
+match /brands/{brandId} {
+  allow read: if true;
+  allow write: if isAdmin();
+}
+```
+
+**Access Control**:
+- **Read**: Public
+- **Write**: Admin only
+
+**Rationale**: Product taxonomy must be controlled to maintain data consistency.
+
+### Orders
+
+**Path**: `orders/{orderId}` (`firestore.rules:64-72`)
+
+```javascript
+match /orders/{orderId} {
+  // Prevent empty order spam
+  allow create: if request.resource.data.total > 0 && 
+                   request.resource.data.items is list; 
+  
+  // Read access for owner, admin, or guest checkout
+  allow read: if isAdmin() || 
+                 (request.auth != null && resource.data.userId == request.auth.uid) || 
+                 resource.data.userId == 'GUEST_MP';
+  
+  allow update, delete: if isAdmin();
+}
+```
+
+**Access Control**:
+
+**Create**:
+- Must have `total > 0` (prevents empty orders)
+- Must have `items` array (prevents malformed orders)
+- Anyone can create (Cloud Functions create orders on behalf of users)
+
+**Read**:
+- Admin can read all orders
+- Authenticated users can read their own orders (`userId == request.auth.uid`)
+- Guest checkout orders are readable by anyone if `userId == 'GUEST_MP'`
+
+**Update/Delete**:
+- Admin only (prevents customers from modifying order status)
+
+**Security Considerations**:
+
+1. **Guest Orders**: The `userId == 'GUEST_MP'` rule allows unauthenticated checkout via MercadoPago. This is acceptable because:
+   - Order details are sent via email
+   - Payment is verified server-side
+   - Sensitive operations (status changes) require admin
+
+2. **Creation Validation**: The `total > 0` check prevents spam:
+   ```javascript
+   // ❌ Blocked
+   await addDoc(collection(db, 'orders'), { items: [] });
+   // Error: Missing or insufficient permissions
+   ```
+
+### Remissions
+
+**Path**: `remissions/{remissionId}` (`firestore.rules:75-80`)
+
+```javascript
+match /remissions/{remissionId} {
+  // Only admin can create (prevents customer-generated warehouse docs)
+  allow create: if isAdmin(); 
+  allow read, update, delete: if isAdmin();
+}
+```
+
+**Access Control**:
+- **All operations**: Admin only
+
+**Rationale**: Remissions are internal warehouse documents. If customers could create them, it would generate false inventory movements.
+
+**Created by**: Payment webhooks running with admin SDK (`functions/mercadopago.js:286`)
+
+### Warranties
+
+**Path**: `warranties/{warrantyId}` (`firestore.rules:83-87`)
+
+```javascript
+match /warranties/{warrantyId} {
+  allow create: if isAuthenticated() && 
+                   request.resource.data.userId == request.auth.uid;
+  
+  allow read: if isAuthenticated() && 
+                 (resource.data.userId == request.auth.uid || isAdmin());
+  
+  allow update, delete: if isAdmin();
+}
+```
+
+**Access Control**:
+
+**Create**:
+- Must be authenticated
+- Can only create warranty for yourself (`userId == request.auth.uid`)
+
+**Read**:
+- User can read their own warranties
+- Admin can read all warranties
+
+**Update/Delete**:
+- Admin only (prevents customers from changing status/resolution)
+
+**Example**: Customer submits warranty claim
+
+```javascript
+// ✅ Allowed
+await addDoc(collection(db, 'warranties'), {
+  userId: currentUser.uid,
+  productName: 'iPhone 15 Pro',
+  issueDescription: 'Screen not turning on',
+  createdAt: serverTimestamp()
+});
+
+// ❌ Blocked: Attempting to create for another user
+await addDoc(collection(db, 'warranties'), {
+  userId: 'another_user_id',
+  // ...
+});
+// Error: Missing or insufficient permissions
+```
+
+### Internal Operations
+
+**Paths**: `warranty_inventory`, `suppliers`, `purchases` (`firestore.rules:90-92`)
+
+```javascript
+match /warranty_inventory/{itemId} { allow read, write: if isAdmin(); }
+match /suppliers/{supplierId} { allow read, write: if isAdmin(); }
+match /purchases/{purchaseId} { allow read, write: if isAdmin(); }
+```
+
+**Access Control**: Admin only (internal business operations)
+
+### Cart (Legacy)
+
+**Path**: `carts/{cartItemId}` (`firestore.rules:95-98`)
+
+```javascript
+match /carts/{cartItemId} {
+  allow create: if isAuthenticated() && 
+                   request.resource.data.userId == request.auth.uid;
+  
+  allow read, update, delete: if isAuthenticated() && 
+                                 resource.data.userId == request.auth.uid;
+}
+```
+
+**Access Control**:
+- Users can only manage their own cart items
+- Must be authenticated
+
+**Note**: This collection is deprecated. Modern implementation uses client-side cart state (localStorage).
+
+### Configuration
+
+**Path**: `config/{configDoc}` (`firestore.rules:101-104`)
+
+```javascript
+match /config/{configDoc} {
+  allow read: if true;
+  allow write: if isAdmin();
+}
+```
+
+**Access Control**:
+- **Read**: Public (needed for shipping calculator, site settings)
+- **Write**: Admin only
+
+**Documents**:
+- `config/shipping`: Shipping rates and thresholds
+- `config/merchant_feed_cache`: Google feed cache
+- `config/site_settings`: General settings
+
+### Accounting & Treasury
+
+**Paths**: `expenses`, `expenses_trash`, `accounts`, `payables` (`firestore.rules:107-110`)
+
+```javascript
+match /expenses/{expenseId} { allow read, write: if isAdmin(); }
+match /expenses_trash/{trashId} { allow read, write: if isAdmin(); }
+match /accounts/{accountId} { allow read, write: if isAdmin(); }
+match /payables/{payableId} { allow read, write: if isAdmin(); }
+```
+
+**Access Control**: Admin only (sensitive financial data)
+
+**Collections**:
+- `expenses`: Income and expense transactions
+- `expenses_trash`: Soft-deleted expenses (audit trail)
+- `accounts`: Treasury accounts (banks, payment gateways)
+- `payables`: Accounts payable tracking
+
+### Chats (WhatsApp)
+
+**Path**: `chats/{chatId}` (`firestore.rules:113-118`)
+
+```javascript
+match /chats/{chatId} {
+  allow read, write: if isAdmin();
+  
+  match /messages/{messageId} {
+    allow read, write: if isAdmin();
+  }
+}
+```
+
+**Access Control**: Admin only
+
+**Rationale**: Customer service conversations contain private information and must not be accessible to other customers.
+
+**Written by**: `whatsappWebhook` function with admin SDK (`functions/whatsapp.js:158`)
+
+## Security Patterns
+
+### Pattern 1: Public Read, Admin Write
+
+```javascript
+match /products/{productId} {
+  allow read: if true;
+  allow write: if isAdmin();
+}
+```
+
+**Use Case**: Catalog data that everyone can view but only admins can modify.
+
+**Collections**: `products`, `categories`, `brands`, `config`
+
+### Pattern 2: Owner Access
+
+```javascript
+match /users/{userId} {
+  allow read, write: if isOwner(userId) || isAdmin();
+}
+```
+
+**Use Case**: Personal data that users can manage themselves.
+
+**Collections**: `users`, `warranties`, `carts`
+
+### Pattern 3: Admin Only
+
+```javascript
+match /expenses/{expenseId} {
+  allow read, write: if isAdmin();
+}
+```
+
+**Use Case**: Sensitive business operations and financial data.
+
+**Collections**: `remissions`, `expenses`, `accounts`, `suppliers`, `chats`
+
+### Pattern 4: Restricted Field Updates
+
+```javascript
+allow update: if isAuthenticated() && 
+  request.resource.data.diff(resource.data).affectedKeys()
+  .hasOnly(['stock', 'combinations', 'updatedAt']);
+```
+
+**Use Case**: Allow specific field updates (like inventory) without full document access.
+
+**Collections**: `products`
+
+### Pattern 5: Creation Validation
+
+```javascript
+allow create: if request.resource.data.total > 0 && 
+                 request.resource.data.items is list;
+```
+
+**Use Case**: Prevent malformed or spam documents.
+
+**Collections**: `orders`
+
+## Data Validation
+
+While security rules focus on access control, they can also validate data structure:
+
+```javascript
+// Ensure orders have required fields
+match /orders/{orderId} {
+  allow create: if request.resource.data.keys().hasAll([
+    'userId', 'items', 'total', 'status', 'paymentMethod'
+  ]) && request.resource.data.total is number && 
+     request.resource.data.total > 0;
+}
+```
+
+**Note**: Current implementation has minimal validation. Cloud Functions handle most validation logic.
+
+## Testing Rules
+
+### Firebase Emulator
+
+```bash
+# Start emulator with rules
+firebase emulators:start
+
+# Test with Rules Playground
+open http://localhost:4000/firestore
+```
+
+### Unit Tests
+
+Create `firestore.rules.test.js`:
+
+```javascript
+const { initializeTestEnvironment } = require('@firebase/rules-unit-testing');
+
+let testEnv;
+
+beforeAll(async () => {
+  testEnv = await initializeTestEnvironment({
+    projectId: 'pixeltech-test',
+    firestore: {
+      rules: fs.readFileSync('firestore.rules', 'utf8')
+    }
+  });
+});
+
+test('Users can read their own profile', async () => {
+  const userId = 'user123';
+  const db = testEnv.authenticatedContext(userId).firestore();
+  
+  await assertSucceeds(
+    db.collection('users').doc(userId).get()
+  );
+});
+
+test('Users cannot read other profiles', async () => {
+  const db = testEnv.authenticatedContext('user123').firestore();
+  
+  await assertFails(
+    db.collection('users').doc('user456').get()
+  );
+});
+```
+
+## Deployment
+
+```bash
+# Deploy rules only
+firebase deploy --only firestore:rules
+
+# Deploy rules and indexes
+firebase deploy --only firestore
+
+# Validate before deploying
+firebase firestore:rules:release --dry-run
+```
+
+## Best Practices
+
+### 1. Principle of Least Privilege
+
+```javascript
+// ❌ Too permissive
+match /orders/{orderId} {
+  allow read: if true;
+}
+
+// ✅ Restricted access
+match /orders/{orderId} {
+  allow read: if isOwner(resource.data.userId) || isAdmin();
+}
+```
+
+### 2. Validate on Write
+
+```javascript
+match /products/{productId} {
+  allow create: if request.resource.data.price > 0 &&
+                   request.resource.data.stock >= 0;
+}
+```
+
+### 3. Use Helper Functions
+
+```javascript
+// ❌ Repetitive
+match /users/{userId} {
+  allow read: if request.auth != null && request.auth.uid == userId;
+}
+
+// ✅ Reusable
+match /users/{userId} {
+  allow read: if isOwner(userId);
+}
+```
+
+### 4. Server-Side Validation
+
+Rules are not a replacement for server-side validation:
+
+```javascript
+// Cloud Function does heavy validation
+exports.createOrder = functions.https.onCall(async (data, context) => {
+  // Validate user, prices, stock, etc.
+  // Rules only check basic access control
+});
+```
+
+### 5. Monitor Rule Violations
+
+Set up alerts in Firebase Console:
+- **Alerts → Create Alert**
+- Metric: `firestore.googleapis.com/document/read_count`
+- Filter: `response_code = PERMISSION_DENIED`
+- Threshold: >10 per hour
+
+## Common Pitfalls
+
+### Pitfall 1: Forgetting Server SDK Bypass
+
+```javascript
+// Cloud Functions use Admin SDK and bypass all rules
+const db = admin.firestore();
+await db.collection('orders').doc(orderId).update({ status: 'PAGADO' });
+// ✅ Always works, regardless of rules
+```
+
+### Pitfall 2: Guest Checkout Security
+
+```javascript
+// ❌ Insecure: Anyone can read any guest order
+allow read: if resource.data.userId == 'GUEST_MP';
+
+// ✅ Better: Store session token and validate
+allow read: if resource.data.sessionToken == request.auth.token.sessionToken;
+```
+
+### Pitfall 3: Subcollection Access
+
+Subcollections don't inherit parent rules:
+
+```javascript
+match /products/{productId} {
+  allow read: if true;
+  
+  // Must explicitly allow subcollection access
+  match /history/{historyId} {
+    allow read: if isAdmin();
+  }
+}
+```
+
+## Security Checklist
+
+- [x] Admin role checked via Firestore document (not custom claims)
+- [x] Financial collections restricted to admin only
+- [x] Users can only access their own orders/warranties
+- [x] Product prices protected from client manipulation
+- [x] Order creation validated (total > 0, items exist)
+- [x] Remissions can only be created server-side
+- [x] Public read access limited to catalog data
+- [x] WhatsApp chats restricted to admin panel
+- [ ] TODO: Add rate limiting for order creation
+- [ ] TODO: Implement session tokens for guest checkout
+- [ ] TODO: Add field-level validation for all writes

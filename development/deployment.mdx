@@ -1,0 +1,552 @@
+---
+title: 'Deployment Guide'
+description: 'Deploy PixelTech Colombia to production with Firebase'
+---
+
+## Overview
+
+This guide covers deploying the PixelTech Colombia e-commerce platform to production using Firebase Hosting, Cloud Functions, and related services.
+
+## Pre-Deployment Checklist
+
+Before deploying, ensure:
+
+<Check>Firebase project is created and configured</Check>
+<Check>All environment variables are set in Firebase Functions secrets</Check>
+<Check>You're logged into Firebase CLI (`firebase login`)</Check>
+<Check>Correct Firebase project is selected (`firebase use production`)</Check>
+<Check>All tests pass locally</Check>
+<Check>Code is committed to version control</Check>
+
+## Build Process
+
+### Tailwind CSS Compilation
+
+<Steps>
+  <Step title="Build Tailwind CSS for Production">
+    Compile Tailwind CSS with optimizations for production:
+
+    ```bash
+    npx tailwindcss -i ./src/input.css -o ./public/css/styles.css --minify
+    ```
+
+    This command:
+    - Reads the input CSS from `src/input.css`
+    - Processes it through Tailwind CSS
+    - Minifies the output for production
+    - Writes to `public/css/styles.css`
+
+    <Info>
+      The `--minify` flag reduces the CSS file size significantly for faster page loads.
+    </Info>
+  </Step>
+
+  <Step title="Verify Build Output">
+    Check that the compiled CSS exists and is optimized:
+
+    ```bash
+    ls -lh public/css/styles.css
+    ```
+
+    The file should be significantly smaller than the development version.
+  </Step>
+</Steps>
+
+### Cloud Functions Preparation
+
+<Steps>
+  <Step title="Install Production Dependencies">
+    Ensure all Cloud Functions dependencies are installed:
+
+    ```bash
+    cd functions
+    npm install --production
+    cd ..
+    ```
+  </Step>
+
+  <Step title="Validate Functions Code">
+    Run a quick validation to check for syntax errors:
+
+    ```bash
+    cd functions
+    node -c index.js
+    cd ..
+    ```
+  </Step>
+</Steps>
+
+## Deployment Commands
+
+### Full Deployment
+
+Deploy all Firebase services at once:
+
+```bash
+firebase deploy
+```
+
+This deploys:
+- Cloud Functions
+- Firebase Hosting
+- Firestore Rules
+- Firestore Indexes
+- Storage Rules
+
+<Warning>
+  Full deployments can take 5-10 minutes. Use selective deployment for faster iterations.
+</Warning>
+
+### Selective Deployment
+
+<Tabs>
+  <Tab title="Hosting Only">
+    Deploy just the frontend (HTML, CSS, JS):
+
+    ```bash
+    firebase deploy --only hosting
+    ```
+
+    Use this when you've only changed frontend code or styles.
+    
+    **Deploy time**: ~30 seconds
+  </Tab>
+
+  <Tab title="Functions Only">
+    Deploy only Cloud Functions:
+
+    ```bash
+    firebase deploy --only functions
+    ```
+
+    Deploy specific functions:
+
+    ```bash
+    # Deploy a single function
+    firebase deploy --only functions:createMercadoPagoPreference
+
+    # Deploy multiple specific functions
+    firebase deploy --only functions:mercadoPagoWebhook,functions:createCODOrder
+    ```
+
+    **Deploy time**: 2-5 minutes per function
+  </Tab>
+
+  <Tab title="Firestore Rules">
+    Deploy Firestore security rules and indexes:
+
+    ```bash
+    # Deploy rules only
+    firebase deploy --only firestore:rules
+
+    # Deploy indexes only
+    firebase deploy --only firestore:indexes
+
+    # Deploy both
+    firebase deploy --only firestore
+    ```
+
+    **Deploy time**: ~10 seconds
+  </Tab>
+
+  <Tab title="Storage Rules">
+    Deploy Cloud Storage security rules:
+
+    ```bash
+    firebase deploy --only storage
+    ```
+
+    **Deploy time**: ~10 seconds
+  </Tab>
+</Tabs>
+
+## Environment Variables for Production
+
+### Setting Function Secrets
+
+For production, use Firebase's secret manager instead of `.env` files:
+
+<Steps>
+  <Step title="Set Payment Gateway Credentials">
+    ```bash
+    # MercadoPago
+    firebase functions:secrets:set MP_ACCESS_TOKEN
+    # Paste your production token when prompted
+
+    # ADDI
+    firebase functions:secrets:set ADDI_CLIENT_ID
+    firebase functions:secrets:set ADDI_CLIENT_SECRET
+
+    # Sistecrédito
+    firebase functions:secrets:set SC_API_KEY
+    firebase functions:secrets:set SC_APP_KEY
+    firebase functions:secrets:set SC_APP_TOKEN
+    ```
+  </Step>
+
+  <Step title="Set Email Configuration">
+    ```bash
+    firebase functions:secrets:set SMTP_HOST
+    firebase functions:secrets:set SMTP_PORT
+    firebase functions:secrets:set SMTP_EMAIL
+    firebase functions:secrets:set SMTP_PASSWORD
+    ```
+
+    Example values:
+    - `SMTP_HOST`: `smtp.gmail.com`
+    - `SMTP_PORT`: `465`
+    - `SMTP_EMAIL`: `pedidos@pixeltech.com.co`
+  </Step>
+
+  <Step title="Set WhatsApp Configuration">
+    ```bash
+    firebase functions:secrets:set WHATSAPP_VERIFY_TOKEN
+    firebase functions:secrets:set WHATSAPP_API_TOKEN
+    firebase functions:secrets:set WHATSAPP_PHONE_ID
+    ```
+  </Step>
+
+  <Step title="Verify Secrets">
+    List all configured secrets:
+
+    ```bash
+    firebase functions:secrets:access
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  After setting or updating secrets, you must redeploy your functions for the changes to take effect:
+  ```bash
+  firebase deploy --only functions
+  ```
+</Warning>
+
+## Deployment Workflow
+
+### Standard Deployment Process
+
+<Steps>
+  <Step title="Build Frontend Assets">
+    ```bash
+    # Compile and minify Tailwind CSS
+    npx tailwindcss -i ./src/input.css -o ./public/css/styles.css --minify
+    ```
+  </Step>
+
+  <Step title="Test Locally">
+    ```bash
+    # Start emulators
+    firebase emulators:start
+    ```
+
+    Verify everything works in the emulator environment before deploying.
+  </Step>
+
+  <Step title="Deploy to Production">
+    ```bash
+    # Deploy everything
+    firebase deploy
+
+    # Or deploy selectively
+    firebase deploy --only hosting,functions
+    ```
+  </Step>
+
+  <Step title="Monitor Deployment">
+    Watch the deployment progress in your terminal. You'll see:
+    - Functions being uploaded and deployed
+    - Hosting files being uploaded
+    - Rules being updated
+    - Final deployment URLs
+  </Step>
+
+  <Step title="Verify Deployment">
+    Open your production URL and verify:
+    - Site loads correctly
+    - Styles are applied (Tailwind CSS)
+    - Functions are accessible
+    - Authentication works
+    - Database operations work
+  </Step>
+</Steps>
+
+## Cloud Functions Deployment Details
+
+### Available Functions
+
+The platform includes the following Cloud Functions:
+
+**Payment Processing:**
+- `createMercadoPagoPreference` - Create MercadoPago payment
+- `mercadoPagoWebhook` - Handle MercadoPago webhooks
+- `createCODOrder` - Create cash-on-delivery orders
+- `createAddiCheckout` - Create ADDI payment checkout
+- `addiWebhook` - Handle ADDI webhooks
+- `createSistecreditoCheckout` - Create Sistecrédito checkout
+- `sistecreditoWebhook` - Handle Sistecrédito webhooks
+
+**Notifications:**
+- `sendOrderConfirmation` - Email order confirmations
+- `sendDispatchNotification` - Email shipping notifications
+- `sendWhatsappMessage` - Send WhatsApp messages
+- `whatsappWebhook` - Handle WhatsApp webhooks
+
+**Scheduled Tasks:**
+- `cleanupOldOrders` - Runs every 24 hours
+- `processScheduledTransfers` - Process pending transfers
+- `cancelAbandonedPayments` - Cancel expired payments
+- `checkExpiredPromotions` - Expire outdated promotions
+
+**Other:**
+- `touchProductTimestamp` - Update product sync timestamps
+- `generateProductFeed` - Generate Google Merchant feed
+- `sitemap` - Generate XML sitemap
+
+### Function Configuration
+
+Functions are configured to use:
+- **Node.js Runtime**: v24 (specified in `functions/package.json`)
+- **Region**: Auto-selected by Firebase (typically us-central1)
+- **Memory**: Default (256MB, can be increased per function if needed)
+- **Timeout**: Default (60s for HTTP, 540s for scheduled)
+
+### Deploying Individual Functions
+
+For faster deployments, deploy only changed functions:
+
+```bash
+# Deploy payment-related functions
+firebase deploy --only functions:createMercadoPagoPreference,functions:mercadoPagoWebhook
+
+# Deploy email functions
+firebase deploy --only functions:sendOrderConfirmation,functions:sendDispatchNotification
+
+# Deploy scheduled functions
+firebase deploy --only functions:cleanupOldOrders,functions:processScheduledTransfers
+```
+
+## Post-Deployment Verification
+
+<Steps>
+  <Step title="Check Hosting">
+    Verify your site is accessible:
+
+    ```bash
+    curl -I https://your-project-id.web.app
+    ```
+
+    Or visit the URL in your browser.
+  </Step>
+
+  <Step title="Test Cloud Functions">
+    Check function endpoints:
+
+    ```bash
+    # Check sitemap
+    curl https://your-project-id.web.app/sitemap.xml
+
+    # Check Google Merchant feed
+    curl https://your-project-id.web.app/google-feed.xml
+    ```
+  </Step>
+
+  <Step title="Monitor Function Logs">
+    View real-time logs:
+
+    ```bash
+    firebase functions:log
+
+    # Or view logs for a specific function
+    firebase functions:log --only createMercadoPagoPreference
+    ```
+  </Step>
+
+  <Step title="Check Firestore Rules">
+    Test that security rules are active:
+    1. Go to Firebase Console > Firestore Database
+    2. Try to read/write data without authentication
+    3. Verify proper access control
+  </Step>
+
+  <Step title="Verify Storage Rules">
+    Test Storage security:
+    1. Go to Firebase Console > Storage
+    2. Try to upload without authentication
+    3. Verify public read access for product images
+  </Step>
+</Steps>
+
+## Rollback Strategy
+
+### Rolling Back Hosting
+
+Firebase Hosting keeps previous deployments. To rollback:
+
+```bash
+# List previous releases
+firebase hosting:channel:list
+
+# Rollback to a previous version
+firebase hosting:clone <previous-version>:live <channel-id>:live
+```
+
+Or use the Firebase Console:
+1. Go to **Hosting** > **Release history**
+2. Click on a previous release
+3. Click **Rollback**
+
+### Rolling Back Functions
+
+Functions don't have automatic rollback. To revert:
+
+1. Checkout the previous code version:
+   ```bash
+   git checkout <previous-commit>
+   ```
+
+2. Redeploy:
+   ```bash
+   cd functions
+   npm install
+   cd ..
+   firebase deploy --only functions
+   ```
+
+## CI/CD Integration
+
+### GitHub Actions Example
+
+Create `.github/workflows/deploy.yml`:
+
+```yaml
+name: Deploy to Firebase
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '24'
+      
+      - name: Install dependencies
+        run: |
+          npm install
+          cd functions && npm install
+      
+      - name: Build Tailwind CSS
+        run: npx tailwindcss -i ./src/input.css -o ./public/css/styles.css --minify
+      
+      - name: Deploy to Firebase
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: '${{ secrets.GITHUB_TOKEN }}'
+          firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}'
+          projectId: your-project-id
+          channelId: live
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Deployment fails with authentication error">
+    Solution:
+    ```bash
+    firebase login --reauth
+    firebase use --add
+    ```
+    Select your project again.
+  </Accordion>
+
+  <Accordion title="Functions fail to deploy due to Node version">
+    Ensure your local Node.js version matches the one specified in `functions/package.json` (v24):
+    ```bash
+    node --version
+    # Should show v24.x.x
+    ```
+    Use nvm to switch versions if needed.
+  </Accordion>
+
+  <Accordion title="Styles not updating after deployment">
+    1. Clear your browser cache
+    2. Verify the CSS file was rebuilt:
+       ```bash
+       ls -lh public/css/styles.css
+       ```
+    3. Check browser DevTools Network tab for 304 vs 200 status
+  </Accordion>
+
+  <Accordion title="Function environment variables not working">
+    After setting secrets, you must redeploy:
+    ```bash
+    firebase deploy --only functions
+    ```
+    Verify secrets are set:
+    ```bash
+    firebase functions:secrets:access
+    ```
+  </Accordion>
+
+  <Accordion title="Quota exceeded errors">
+    Check your usage in Firebase Console:
+    1. Go to **Usage and billing**
+    2. Check which services are consuming quota
+    3. Optimize function calls or upgrade plan if needed
+  </Accordion>
+</AccordionGroup>
+
+## Performance Optimization
+
+### Hosting Performance
+
+- **CDN**: Firebase Hosting automatically uses a global CDN
+- **Compression**: Gzip/Brotli compression is automatic
+- **Caching**: Configure cache headers in `firebase.json` if needed
+- **SSL**: HTTPS is automatic and free
+
+### Function Performance
+
+- **Cold Starts**: Keep functions warm with scheduled pings if needed
+- **Memory**: Increase memory allocation for heavy functions
+- **Concurrency**: Optimize database queries to reduce execution time
+
+### Tailwind CSS Optimization
+
+The `--minify` flag already optimizes CSS, but you can further reduce size:
+
+```js tailwind.config.js
+module.exports = {
+  content: ["./public/**/*.{html,js}"],
+  theme: {
+    extend: {
+      colors: {
+        'brand-primary': '#2563EB',
+        'brand-dark': '#1E293B',
+      }
+    },
+  },
+  plugins: [],
+}
+```
+
+Ensure the `content` array includes all files that use Tailwind classes to enable proper purging.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Environment Setup" icon="laptop-code" href="/development/environment">
+    Set up local development environment
+  </Card>
+  <Card title="Firebase Setup" icon="fire" href="/development/firebase-setup">
+    Configure Firebase services
+  </Card>
+</CardGroup>

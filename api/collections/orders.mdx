@@ -1,0 +1,382 @@
+---
+title: 'Orders Collection'
+description: 'Firestore schema for e-commerce orders with payment and shipping tracking'
+icon: 'receipt'
+---
+
+## Overview
+
+The `orders` collection stores all customer orders from web purchases, including payment details, shipping information, and order status tracking.
+
+## Collection Path
+
+```
+orders/{orderId}
+```
+
+## Document Schema
+
+<ResponseField name="Order Document" type="object">
+  <Expandable title="Metadata">
+    <ResponseField name="source" type="string" required>
+      Order origin: `TIENDA_WEB`, `VENTA_MANUAL`, `POS`
+    </ResponseField>
+    <ResponseField name="createdAt" type="timestamp" required>
+      Order creation timestamp
+    </ResponseField>
+    <ResponseField name="updatedAt" type="timestamp">
+      Last modification timestamp
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Customer Information">
+    <ResponseField name="userId" type="string" required>
+      Firebase Auth UID
+    </ResponseField>
+    <ResponseField name="userEmail" type="string" required>
+      Customer email address
+    </ResponseField>
+    <ResponseField name="userName" type="string" required>
+      Customer full name
+    </ResponseField>
+    <ResponseField name="phone" type="string" required>
+      Contact phone number
+    </ResponseField>
+    <ResponseField name="clientDoc" type="string">
+      Government ID number (Cédula)
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Shipping Data">
+    <ResponseField name="shippingData" type="object" required>
+      Delivery address information
+      ```javascript
+      {
+        address: 'Calle 123 #45-67',
+        city: 'Bogotá',
+        department: 'Cundinamarca',
+        phone: '3001234567',
+        postalCode: '110111'
+      }
+      ```
+    </ResponseField>
+    <ResponseField name="carrier" type="string">
+      Shipping carrier name (e.g., "Servientrega", "Coordinadora")
+    </ResponseField>
+    <ResponseField name="trackingNumber" type="string">
+      Carrier tracking/guide number
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Billing Data">
+    <ResponseField name="billingData" type="object">
+      Invoice information (optional)
+      ```javascript
+      {
+        companyName: 'Empresa S.A.S',
+        nit: '900123456-7',
+        address: 'Calle 456 #78-90',
+        city: 'Bogotá'
+      }
+      ```
+    </ResponseField>
+    <ResponseField name="requiresInvoice" type="boolean">
+      True if customer requested invoice
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Order Items">
+    <ResponseField name="items" type="array" required>
+      Products in the order
+      ```javascript
+      [
+        {
+          id: 'product-id',
+          name: 'iPhone 14 Pro',
+          price: 4500000,
+          quantity: 1,
+          color: 'negro',
+          capacity: '256GB',
+          mainImage: 'https://...'
+        }
+      ]
+      ```
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Pricing">
+    <ResponseField name="subtotal" type="number" required>
+      Sum of all items (price × quantity)
+    </ResponseField>
+    <ResponseField name="shippingCost" type="number" required>
+      Delivery fee in COP
+    </ResponseField>
+    <ResponseField name="total" type="number" required>
+      Final amount: subtotal + shippingCost
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Status Management">
+    <ResponseField name="status" type="string" required>
+      Order lifecycle status:
+      - `PENDIENTE_PAGO` - Awaiting payment confirmation
+      - `PENDIENTE` - COD order, awaiting fulfillment
+      - `PAGADO` - Payment confirmed, ready to ship
+      - `DESPACHADO` / `EN_RUTA` - Shipped
+      - `ENTREGADO` - Delivered
+      - `RECHAZADO` - Payment failed
+      - `CANCELADO` - Cancelled by system or admin
+    </ResponseField>
+    <ResponseField name="statusDetail" type="string">
+      Additional status info (e.g., "expired_by_system")
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Payment Information">
+    <ResponseField name="paymentMethod" type="string" required>
+      Payment gateway: `MERCADOPAGO`, `ADDI`, `SISTECREDITO`, `CONTRAENTREGA`
+    </ResponseField>
+    <ResponseField name="paymentStatus" type="string" required>
+      `PENDING`, `PAID`, or `REJECTED`
+    </ResponseField>
+    <ResponseField name="paymentId" type="string">
+      External payment transaction ID from gateway
+    </ResponseField>
+    <ResponseField name="paymentAccountId" type="string">
+      Treasury account ID that received the payment
+    </ResponseField>
+    <ResponseField name="paymentMethodName" type="string">
+      Human-readable account name (e.g., "MercadoPago")
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Inventory Control">
+    <ResponseField name="isStockDeducted" type="boolean" required>
+      True if inventory has been deducted (prevents duplicate deductions)
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Email Tracking">
+    <ResponseField name="confirmationEmailSent" type="boolean">
+      True if order confirmation email was sent
+    </ResponseField>
+    <ResponseField name="dispatchEmailSent" type="boolean">
+      True if shipping notification email was sent
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Additional Fields">
+    <ResponseField name="notes" type="string">
+      Customer or admin notes
+    </ResponseField>
+    <ResponseField name="buyerInfo" type="object">
+      Legacy field containing customer data (use root fields instead)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Example Document
+
+```json
+{
+  "source": "TIENDA_WEB",
+  "createdAt": "2026-03-05T14:30:00Z",
+  "updatedAt": "2026-03-05T16:45:00Z",
+  
+  "userId": "firebase-user-uid-123",
+  "userEmail": "juan.perez@example.com",
+  "userName": "Juan Pérez",
+  "phone": "3001234567",
+  "clientDoc": "1234567890",
+  
+  "shippingData": {
+    "address": "Calle 123 #45-67 Apto 301",
+    "city": "Bogotá",
+    "department": "Cundinamarca",
+    "phone": "3001234567"
+  },
+  
+  "billingData": null,
+  "requiresInvoice": false,
+  
+  "items": [
+    {
+      "id": "prod-abc123",
+      "name": "iPhone 14 Pro",
+      "price": 4500000,
+      "quantity": 1,
+      "color": "negro",
+      "capacity": "256GB",
+      "mainImage": "https://storage.googleapis.com/pixeltech/iphone14pro.jpg"
+    }
+  ],
+  
+  "subtotal": 4500000,
+  "shippingCost": 15000,
+  "total": 4515000,
+  
+  "status": "PAGADO",
+  "statusDetail": null,
+  
+  "paymentMethod": "MERCADOPAGO",
+  "paymentStatus": "PAID",
+  "paymentId": "mp-123456789",
+  "paymentAccountId": "acc-xyz789",
+  "paymentMethodName": "MercadoPago",
+  
+  "isStockDeducted": true,
+  
+  "carrier": "Servientrega",
+  "trackingNumber": "1234567890",
+  
+  "confirmationEmailSent": true,
+  "dispatchEmailSent": true,
+  
+  "notes": "Entregar en recepción"
+}
+```
+
+## Queries
+
+### Get User's Orders
+
+```javascript
+const snapshot = await db.collection('orders')
+    .where('userId', '==', userId)
+    .orderBy('createdAt', 'desc')
+    .get();
+```
+
+### Get Pending Fulfillment Orders
+
+```javascript
+const snapshot = await db.collection('orders')
+    .where('status', '==', 'PAGADO')
+    .orderBy('createdAt', 'asc')
+    .get();
+```
+
+### Get Orders Awaiting Payment
+
+```javascript
+const snapshot = await db.collection('orders')
+    .where('status', '==', 'PENDIENTE_PAGO')
+    .where('createdAt', '>', thirtyMinutesAgo)
+    .get();
+```
+
+### Get Shipped Orders
+
+```javascript
+const snapshot = await db.collection('orders')
+    .where('status', 'in', ['DESPACHADO', 'EN_RUTA'])
+    .where('trackingNumber', '!=', null)
+    .get();
+```
+
+### Get Orders by Payment Method
+
+```javascript
+const snapshot = await db.collection('orders')
+    .where('paymentMethod', '==', 'MERCADOPAGO')
+    .where('paymentStatus', '==', 'PAID')
+    .get();
+```
+
+### Get Revenue by Date Range
+
+```javascript
+const snapshot = await db.collection('orders')
+    .where('paymentStatus', '==', 'PAID')
+    .where('createdAt', '>=', startDate)
+    .where('createdAt', '<=', endDate)
+    .get();
+
+const totalRevenue = snapshot.docs.reduce((sum, doc) => 
+    sum + (doc.data().total || 0), 0
+);
+```
+
+## Order Lifecycle
+
+### Online Payment Flow
+
+<Steps>
+  <Step title="Order Created">
+    Status: `PENDIENTE_PAGO`, `isStockDeducted: false`
+  </Step>
+  <Step title="Payment Confirmed (Webhook)">
+    Status: `PAGADO`, inventory deducted, remission created
+  </Step>
+  <Step title="Order Shipped">
+    Status: `DESPACHADO`, tracking number added
+  </Step>
+  <Step title="Order Delivered">
+    Status: `ENTREGADO`
+  </Step>
+</Steps>
+
+### Cash on Delivery Flow
+
+<Steps>
+  <Step title="Order Created">
+    Status: `PENDIENTE`, inventory deducted immediately
+  </Step>
+  <Step title="Payment Confirmed Manually">
+    Admin marks as `PAGADO`
+  </Step>
+  <Step title="Order Shipped">
+    Status: `DESPACHADO`
+  </Step>
+  <Step title="Order Delivered">
+    Status: `ENTREGADO`
+  </Step>
+</Steps>
+
+## Security Rules
+
+Recommended Firestore security rules:
+
+```javascript
+match /orders/{orderId} {
+  // Users can read their own orders
+  allow read: if request.auth != null && 
+              resource.data.userId == request.auth.uid;
+  
+  // Only admins can update orders
+  allow update: if request.auth != null &&
+                get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+  
+  // Orders created via Cloud Functions only
+  allow create: if false;
+  allow delete: if false;
+}
+```
+
+## Indexes
+
+Required composite indexes:
+
+```javascript
+// User orders sorted by date
+orders: [userId ASC, createdAt DESC]
+
+// Pending orders
+orders: [status ASC, createdAt ASC]
+
+// Payment tracking
+orders: [paymentMethod ASC, paymentStatus ASC, createdAt DESC]
+
+// Old order cleanup
+orders: [status ASC, createdAt ASC]
+
+// Abandoned payment detection
+orders: [status ASC, createdAt ASC, paymentStatus ASC]
+```
+
+## Related Documentation
+
+- [Order Functions](/api/orders)
+- [Payment Functions](/api/payments)
+- [Email Notifications](/api/emails)
+- [Products Collection](/api/collections/products)

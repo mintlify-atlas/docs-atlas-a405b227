@@ -1,0 +1,416 @@
+---
+title: 'Chats Collection'
+description: 'Firestore schema for customer support chat conversations'
+icon: 'messages'
+---
+
+## Overview
+
+The `chats` collection stores customer support conversations, typically integrated with WhatsApp for real-time messaging.
+
+## Collection Path
+
+```
+chats/{chatId}
+```
+
+## Document Schema
+
+<ResponseField name="Chat Document" type="object">
+  <Expandable title="Participant Information">
+    <ResponseField name="userId" type="string">
+      Firebase Auth UID of the customer (if logged in)
+    </ResponseField>
+    <ResponseField name="customerName" type="string" required>
+      Customer display name
+    </ResponseField>
+    <ResponseField name="customerPhone" type="string" required>
+      Customer phone number (WhatsApp ID)
+    </ResponseField>
+    <ResponseField name="customerEmail" type="string">
+      Customer email address
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Chat Status">
+    <ResponseField name="status" type="string" required>
+      Conversation status:
+      - `OPEN` - Active conversation
+      - `PENDING` - Awaiting response
+      - `RESOLVED` - Issue resolved
+      - `CLOSED` - Conversation ended
+    </ResponseField>
+    <ResponseField name="priority" type="string">
+      Priority level: `low`, `medium`, `high`, `urgent`
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Assignment">
+    <ResponseField name="assignedTo" type="string">
+      User ID of the assigned support agent
+    </ResponseField>
+    <ResponseField name="assignedAt" type="timestamp">
+      When the chat was assigned
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Conversation Data">
+    <ResponseField name="subject" type="string">
+      Chat topic/subject (e.g., "Consulta sobre pedido #ABC123")
+    </ResponseField>
+    <ResponseField name="orderId" type="string">
+      Related order ID (if applicable)
+    </ResponseField>
+    <ResponseField name="category" type="string">
+      Issue category: `order_inquiry`, `product_question`, `technical_support`, `other`
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Messages">
+    <ResponseField name="messages" type="array" required>
+      Array of message objects
+      ```javascript
+      [
+        {
+          id: 'msg-123',
+          sender: 'customer',  // or 'agent', 'system'
+          senderName: 'Juan Pérez',
+          text: 'Hola, ¿cuándo llega mi pedido?',
+          timestamp: Timestamp,
+          mediaUrl: null,  // Optional: image/file URL
+          read: true
+        }
+      ]
+      ```
+    </ResponseField>
+    <ResponseField name="lastMessage" type="object">
+      Copy of the most recent message for quick access
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Timestamps">
+    <ResponseField name="createdAt" type="timestamp" required>
+      Chat creation timestamp
+    </ResponseField>
+    <ResponseField name="updatedAt" type="timestamp" required>
+      Last activity timestamp
+    </ResponseField>
+    <ResponseField name="closedAt" type="timestamp">
+      When chat was closed (if applicable)
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Metrics">
+    <ResponseField name="unreadCount" type="number" default="0">
+      Number of unread messages for agent
+    </ResponseField>
+    <ResponseField name="responseTime" type="number">
+      Average response time in seconds
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Integration">
+    <ResponseField name="whatsappConversationId" type="string">
+      WhatsApp conversation/thread ID
+    </ResponseField>
+    <ResponseField name="channel" type="string">
+      Communication channel: `whatsapp`, `web`, `email`
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Example Document
+
+```json
+{
+  "userId": "firebase-uid-123",
+  "customerName": "Juan Pérez",
+  "customerPhone": "573001234567",
+  "customerEmail": "juan.perez@example.com",
+  
+  "status": "OPEN",
+  "priority": "medium",
+  
+  "assignedTo": "agent-uid-456",
+  "assignedAt": "2026-03-05T10:15:00Z",
+  
+  "subject": "Consulta sobre pedido #ABC12345",
+  "orderId": "order-abc12345",
+  "category": "order_inquiry",
+  
+  "messages": [
+    {
+      "id": "msg-001",
+      "sender": "customer",
+      "senderName": "Juan Pérez",
+      "text": "Hola, ¿cuándo llega mi pedido #ABC12345?",
+      "timestamp": "2026-03-05T10:00:00Z",
+      "mediaUrl": null,
+      "read": true
+    },
+    {
+      "id": "msg-002",
+      "sender": "agent",
+      "senderName": "Soporte PixelTech",
+      "text": "Hola Juan, tu pedido está en camino. Número de guía: 1234567890",
+      "timestamp": "2026-03-05T10:05:00Z",
+      "mediaUrl": null,
+      "read": true
+    }
+  ],
+  
+  "lastMessage": {
+    "text": "Hola Juan, tu pedido está en camino...",
+    "timestamp": "2026-03-05T10:05:00Z",
+    "sender": "agent"
+  },
+  
+  "createdAt": "2026-03-05T10:00:00Z",
+  "updatedAt": "2026-03-05T10:05:00Z",
+  "closedAt": null,
+  
+  "unreadCount": 0,
+  "responseTime": 300,
+  
+  "whatsappConversationId": "wa-conv-789",
+  "channel": "whatsapp"
+}
+```
+
+## Queries
+
+### Get Active Chats
+
+```javascript
+const snapshot = await db.collection('chats')
+    .where('status', 'in', ['OPEN', 'PENDING'])
+    .orderBy('updatedAt', 'desc')
+    .get();
+```
+
+### Get Chats by Agent
+
+```javascript
+const snapshot = await db.collection('chats')
+    .where('assignedTo', '==', agentId)
+    .where('status', '!=', 'CLOSED')
+    .get();
+```
+
+### Get Customer's Chat History
+
+```javascript
+const snapshot = await db.collection('chats')
+    .where('userId', '==', customerId)
+    .orderBy('createdAt', 'desc')
+    .get();
+```
+
+### Get Unassigned Chats
+
+```javascript
+const snapshot = await db.collection('chats')
+    .where('assignedTo', '==', null)
+    .where('status', '==', 'OPEN')
+    .orderBy('createdAt', 'asc')
+    .get();
+```
+
+## Real-Time Listeners
+
+### Listen to Chat Updates
+
+```javascript
+const unsubscribe = db.collection('chats').doc(chatId)
+    .onSnapshot((snapshot) => {
+        const chatData = snapshot.data();
+        renderMessages(chatData.messages);
+        updateUnreadCount(chatData.unreadCount);
+    });
+```
+
+### Listen to New Messages
+
+```javascript
+db.collection('chats').doc(chatId)
+    .onSnapshot((snapshot) => {
+        const newMessages = snapshot.data().messages;
+        const lastMsg = newMessages[newMessages.length - 1];
+        
+        if (lastMsg.sender === 'customer') {
+            playNotificationSound();
+            showToast(`Nuevo mensaje de ${chatData.customerName}`);
+        }
+    });
+```
+
+## Chat Operations
+
+### Create New Chat
+
+```javascript
+const newChatRef = db.collection('chats').doc();
+await newChatRef.set({
+    userId: auth.currentUser?.uid || null,
+    customerName: userName,
+    customerPhone: userPhone,
+    customerEmail: userEmail,
+    status: 'OPEN',
+    priority: 'medium',
+    subject: subject,
+    messages: [],
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    unreadCount: 0,
+    channel: 'web'
+});
+```
+
+### Send Message
+
+```javascript
+const newMessage = {
+    id: `msg-${Date.now()}`,
+    sender: isAgent ? 'agent' : 'customer',
+    senderName: senderName,
+    text: messageText,
+    timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    mediaUrl: null,
+    read: false
+};
+
+await db.collection('chats').doc(chatId).update({
+    messages: admin.firestore.FieldValue.arrayUnion(newMessage),
+    lastMessage: newMessage,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    unreadCount: admin.firestore.FieldValue.increment(1)
+});
+```
+
+### Assign to Agent
+
+```javascript
+await db.collection('chats').doc(chatId).update({
+    assignedTo: agentId,
+    assignedAt: admin.firestore.FieldValue.serverTimestamp(),
+    status: 'OPEN'
+});
+```
+
+### Mark as Read
+
+```javascript
+await db.collection('chats').doc(chatId).update({
+    unreadCount: 0,
+    'messages': messages.map(msg => ({ ...msg, read: true }))
+});
+```
+
+### Close Chat
+
+```javascript
+await db.collection('chats').doc(chatId).update({
+    status: 'CLOSED',
+    closedAt: admin.firestore.FieldValue.serverTimestamp()
+});
+```
+
+## WhatsApp Integration
+
+From `functions/whatsapp.js`, incoming WhatsApp messages are stored in the chats collection:
+
+```javascript
+exports.webhook = async (req, res) => {
+    const message = req.body.message;
+    const from = message.from;  // Phone number
+    const text = message.text.body;
+    
+    // Find or create chat
+    let chatRef = await db.collection('chats')
+        .where('customerPhone', '==', from)
+        .where('status', '!=', 'CLOSED')
+        .limit(1)
+        .get();
+    
+    if (chatRef.empty) {
+        // Create new chat
+        chatRef = db.collection('chats').doc();
+        await chatRef.set({
+            customerPhone: from,
+            status: 'OPEN',
+            channel: 'whatsapp',
+            messages: [],
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+    }
+    
+    // Add message
+    await chatRef.update({
+        messages: admin.firestore.FieldValue.arrayUnion({
+            id: message.id,
+            sender: 'customer',
+            text: text,
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+        })
+    });
+};
+```
+
+## Security Rules
+
+```javascript
+match /chats/{chatId} {
+  // Customers can read their own chats
+  allow read: if request.auth != null && 
+              resource.data.userId == request.auth.uid;
+  
+  // Agents can read/write assigned chats
+  allow read, write: if request.auth != null &&
+                      resource.data.assignedTo == request.auth.uid;
+  
+  // Admins can read/write all chats
+  allow read, write: if request.auth != null &&
+                      get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+}
+```
+
+## Indexes
+
+```javascript
+// Active chats by update time
+chats: [status ASC, updatedAt DESC]
+
+// Agent's chats
+chats: [assignedTo ASC, status ASC]
+
+// Customer history
+chats: [userId ASC, createdAt DESC]
+
+// Unassigned chats
+chats: [assignedTo ASC, status ASC, createdAt ASC]
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Update lastMessage">
+    Always update `lastMessage` when adding new messages for quick preview
+  </Step>
+  <Step title="Increment Timestamps">
+    Update `updatedAt` on every message to keep chats sorted correctly
+  </Step>
+  <Step title="Link to Orders">
+    Always set `orderId` when chat is order-related for context
+  </Step>
+  <Step title="Categorize Chats">
+    Use `category` field for filtering and analytics
+  </Step>
+  <Step title="Monitor Response Times">
+    Track `responseTime` to measure support team performance
+  </Step>
+</Steps>
+
+## Related Documentation
+
+- [Users Collection](/api/collections/users)
+- [Orders Collection](/api/collections/orders)

@@ -1,0 +1,161 @@
+---
+title: 'Admin Dashboard Overview'
+description: 'Comprehensive administrative control panel for PixelTech Colombia e-commerce platform'
+icon: 'gauge-high'
+---
+
+## Dashboard Features
+
+The PixelTech admin dashboard provides real-time operational insights and centralized management of your e-commerce business. Built on Firebase with real-time listeners, the dashboard automatically updates as orders, payments, and inventory changes occur.
+
+### Key Metrics
+
+The dashboard displays five critical KPIs that update in real-time:
+
+<CardGroup cols={2}>
+  <Card title="Total Sales" icon="chart-line" color="#10b981">
+    Aggregated revenue from paid, shipped, and delivered orders
+  </Card>
+  <Card title="Treasury Balance" icon="building-columns" color="#3b82f6">
+    Combined balance across all bank accounts and cash registers
+  </Card>
+  <Card title="Pending Orders" icon="box-open" color="#000000">
+    Priority count of orders awaiting fulfillment
+  </Card>
+  <Card title="Accounts Receivable" icon="hand-holding-dollar" color="#f97316">
+    Outstanding customer payments and partial balances
+  </Card>
+</CardGroup>
+
+### Real-Time Order Management
+
+Orders are automatically categorized by urgency based on a configurable cutoff time (default: 2:30 PM):
+
+```javascript
+const cutoffTimeStr = configSnap.data().cutoffTime || "14:00";
+const now = new Date();
+const [hours, minutes] = cutoffTimeStr.split(':').map(Number);
+const cutoffDateToday = new Date(now);
+cutoffDateToday.setHours(hours, minutes, 0, 0);
+```
+
+**Priority Logic:**
+- Orders placed **before cutoff** → Ship today
+- Orders placed **after cutoff** → Ship next business day
+
+### Smart Real-Time Cache
+
+The dashboard implements an intelligent caching system that minimizes Firebase reads:
+
+```javascript
+function initRealtimeDashboard() {
+    const ordersRef = collection(db, "orders");
+    const qRecentOrders = query(ordersRef, orderBy("createdAt", "desc"), limit(100));
+    
+    unsubscribeOrders = onSnapshot(qRecentOrders, (snap) => {
+        snap.docChanges().forEach(change => {
+            if (['added', 'modified', 'removed'].includes(change.type)) {
+                fetchDashboardData();
+            }
+        });
+    });
+}
+```
+
+<Info>
+  **Performance Optimization**: Only changed documents trigger updates, reducing unnecessary reads by up to 90%.
+</Info>
+
+## User Roles and Permissions
+
+Firestore security rules enforce role-based access control:
+
+### Admin Role
+
+```javascript
+function isAdmin() {
+  return request.auth != null && 
+    exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+    get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+}
+```
+
+**Admin Capabilities:**
+- Full CRUD operations on all collections
+- Access to financial reports and treasury
+- Inventory management and pricing
+- Order status modifications
+- Customer data management
+- WhatsApp CRM access
+
+### Customer Role
+
+Regular users have restricted access:
+- Read-only access to products catalog
+- Manage own orders and profile
+- Update stock quantities (system operations only)
+- Cannot modify prices or sensitive data
+
+## Navigation Structure
+
+The admin sidebar (`admin-ui.js`) provides organized access to all modules:
+
+<Steps>
+  <Step title="Sales & Orders">
+    - Dashboard overview
+    - Order management
+    - Manual sales creation
+    - Remissions and invoices
+  </Step>
+  
+  <Step title="Inventory">
+    - Product catalog
+    - Stock adjustments
+    - Suppliers and purchases
+    - Warranty inventory
+  </Step>
+  
+  <Step title="Customer Service">
+    - WhatsApp CRM
+    - Customer database
+    - Communication history
+  </Step>
+  
+  <Step title="Accounting">
+    - Expenses tracking
+    - Accounts receivable/payable
+    - Treasury management
+    - Financial reports
+  </Step>
+</Steps>
+
+## Quick Actions
+
+The dashboard header provides instant access to critical functions:
+
+```html
+<button id="btn-open-manual" class="bg-brand-black text-white">
+    <i class="fa-solid fa-plus"></i> Nueva Venta
+</button>
+```
+
+<Warning>
+  **Important**: All manual sales automatically update inventory, treasury, and accounts receivable in real-time.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Inventory Management" icon="boxes-stacked" href="/admin/inventory">
+    Learn how to manage products and stock
+  </Card>
+  <Card title="Order Fulfillment" icon="truck-fast" href="/admin/orders">
+    Process and ship customer orders
+  </Card>
+  <Card title="WhatsApp CRM" icon="comments" href="/admin/whatsapp">
+    Manage customer conversations
+  </Card>
+  <Card title="Financial Reports" icon="chart-pie" href="/admin/accounting">
+    Track revenue and expenses
+  </Card>
+</CardGroup>

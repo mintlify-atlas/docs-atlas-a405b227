@@ -1,0 +1,358 @@
+---
+title: 'Products Collection'
+description: 'Firestore schema for product catalog with variants and inventory'
+icon: 'box-open'
+---
+
+## Overview
+
+The `products` collection stores the complete product catalog with support for color/capacity variants, pricing, inventory tracking, and promotional flags.
+
+## Collection Path
+
+```
+products/{productId}
+```
+
+## Document Schema
+
+<ResponseField name="Product Document" type="object">
+  <Expandable title="Basic Information">
+    <ResponseField name="name" type="string" required>
+      Product display name (e.g., "iPhone 14 Pro")
+    </ResponseField>
+    <ResponseField name="category" type="string" required>
+      Product category (e.g., "Celulares", "Computadores")
+    </ResponseField>
+    <ResponseField name="subcategory" type="string">
+      Subcategory for filtering (e.g., "Apple", "Gaming")
+    </ResponseField>
+    <ResponseField name="brand" type="string">
+      Manufacturer brand
+    </ResponseField>
+    <ResponseField name="description" type="string">
+      Product description (HTML supported)
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Pricing">
+    <ResponseField name="price" type="number" required>
+      Current selling price in COP
+    </ResponseField>
+    <ResponseField name="originalPrice" type="number">
+      Price before discount (0 if no discount)
+    </ResponseField>
+    <ResponseField name="cost" type="number">
+      Product cost for profit calculations
+    </ResponseField>
+    <ResponseField name="promoEndsAt" type="timestamp">
+      When to restore originalPrice (null if no active promo)
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Inventory">
+    <ResponseField name="stock" type="number" required>
+      Total units available (sum of all variants if applicable)
+    </ResponseField>
+    <ResponseField name="minStock" type="number">
+      Minimum stock threshold for low inventory alerts
+    </ResponseField>
+    <ResponseField name="sku" type="string">
+      Internal SKU code
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Media">
+    <ResponseField name="mainImage" type="string" required>
+      Primary product image URL
+    </ResponseField>
+    <ResponseField name="image" type="string">
+      Legacy field (use mainImage instead)
+    </ResponseField>
+    <ResponseField name="images" type="array">
+      Additional product images
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Variants">
+    <ResponseField name="hasVariants" type="boolean">
+      True if product has color variants
+    </ResponseField>
+    <ResponseField name="variants" type="array">
+      Array of color variants with images:
+      ```javascript
+      [
+        {
+          color: 'negro',
+          images: ['url1.jpg', 'url2.jpg']
+        }
+      ]
+      ```
+    </ResponseField>
+    <ResponseField name="hasCapacities" type="boolean">
+      True if product has capacity/storage options
+    </ResponseField>
+    <ResponseField name="capacities" type="array">
+      Array of capacity options:
+      ```javascript
+      [
+        { label: '128GB', price: 4500000 },
+        { label: '256GB', price: 5000000 }
+      ]
+      ```
+    </ResponseField>
+    <ResponseField name="combinations" type="array">
+      Stock tracking for color+capacity combinations:
+      ```javascript
+      [
+        {
+          color: 'negro',
+          capacity: '256GB',
+          price: 5000000,
+          stock: 5
+        }
+      ]
+      ```
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Status & Flags">
+    <ResponseField name="status" type="string" required>
+      `active` or `inactive` (only active products appear in catalog)
+    </ResponseField>
+    <ResponseField name="isWeeklyChoice" type="boolean">
+      Featured in "Weekly Choices" section
+    </ResponseField>
+    <ResponseField name="isHeroPromo" type="boolean">
+      Display in hero banner slider
+    </ResponseField>
+    <ResponseField name="isNewLaunch" type="boolean">
+      Show in "New Arrivals" banner
+    </ResponseField>
+    <ResponseField name="promoBannerUrl" type="string">
+      Custom banner image URL for hero slider (optional)
+    </ResponseField>
+    <ResponseField name="launchBannerUrl" type="string">
+      Custom banner image for launch section (optional)
+    </ResponseField>
+  </Expandable>
+
+  <Expandable title="Timestamps">
+    <ResponseField name="createdAt" type="timestamp" required>
+      When product was created
+    </ResponseField>
+    <ResponseField name="updatedAt" type="timestamp" required>
+      Last modification timestamp (critical for SmartProductSync delta updates)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Example Document
+
+```json
+{
+  "name": "iPhone 14 Pro",
+  "category": "Celulares",
+  "subcategory": "Apple",
+  "brand": "Apple",
+  "description": "<p>iPhone con chip A16 Bionic y cámara de 48MP</p>",
+  
+  "price": 4500000,
+  "originalPrice": 5000000,
+  "cost": 3800000,
+  "promoEndsAt": "2026-03-15T23:59:59Z",
+  
+  "stock": 15,
+  "minStock": 3,
+  "sku": "APL-IP14P-256",
+  
+  "mainImage": "https://storage.googleapis.com/pixeltech/iphone14pro.jpg",
+  "images": [
+    "https://storage.googleapis.com/pixeltech/iphone14pro-2.jpg",
+    "https://storage.googleapis.com/pixeltech/iphone14pro-3.jpg"
+  ],
+  
+  "hasVariants": true,
+  "variants": [
+    {
+      "color": "negro",
+      "images": ["https://.../negro-1.jpg"]
+    },
+    {
+      "color": "plateado",
+      "images": ["https://.../plateado-1.jpg"]
+    }
+  ],
+  
+  "hasCapacities": true,
+  "capacities": [
+    { "label": "128GB", "price": 4200000 },
+    { "label": "256GB", "price": 4500000 },
+    { "label": "512GB", "price": 5200000 }
+  ],
+  
+  "combinations": [
+    { "color": "negro", "capacity": "256GB", "price": 4500000, "stock": 8 },
+    { "color": "plateado", "capacity": "256GB", "price": 4500000, "stock": 7 }
+  ],
+  
+  "status": "active",
+  "isWeeklyChoice": true,
+  "isHeroPromo": false,
+  "isNewLaunch": false,
+  
+  "createdAt": "2026-01-15T10:30:00Z",
+  "updatedAt": "2026-03-05T14:22:00Z"
+}
+```
+
+## Queries
+
+### Get All Active Products
+
+```javascript
+const snapshot = await db.collection('products')
+    .where('status', '==', 'active')
+    .get();
+```
+
+### Get Products by Category
+
+```javascript
+const snapshot = await db.collection('products')
+    .where('status', '==', 'active')
+    .where('category', '==', 'Celulares')
+    .orderBy('name', 'asc')
+    .get();
+```
+
+### Get Weekly Featured Products
+
+```javascript
+const snapshot = await db.collection('products')
+    .where('isWeeklyChoice', '==', true)
+    .where('status', '==', 'active')
+    .get();
+```
+
+### Get Low Stock Products
+
+```javascript
+const snapshot = await db.collection('products')
+    .where('stock', '<=', db.collection('products').doc().data().minStock)
+    .get();
+```
+
+### Get Updated Products (Delta Sync)
+
+Used by SmartProductSync:
+
+```javascript
+const lastSyncTime = new Date(1709647200000); // User's last visit
+
+const snapshot = await db.collection('products')
+    .where('updatedAt', '>', lastSyncTime)
+    .get();
+```
+
+## Variant Pricing Logic
+
+When a product has both colors and capacities:
+
+1. **Check `combinations` array first**:
+   ```javascript
+   const combo = product.combinations.find(c => 
+       c.color === selectedColor && c.capacity === selectedCapacity
+   );
+   const price = combo ? combo.price : product.price;
+   ```
+
+2. **Fallback to `capacities` array**:
+   ```javascript
+   if (!combo && product.capacities) {
+       const cap = product.capacities.find(c => c.label === selectedCapacity);
+       const price = cap ? cap.price : product.price;
+   }
+   ```
+
+3. **Default to base price**:
+   ```javascript
+   const price = product.price;
+   ```
+
+## Stock Management
+
+### Deducting Inventory
+
+When an order is paid, stock is deducted from both global and variant-specific stock:
+
+```javascript
+// Global stock
+let newStock = product.stock - orderItem.quantity;
+
+// Variant stock (if applicable)
+if (orderItem.color || orderItem.capacity) {
+    const idx = product.combinations.findIndex(c =>
+        c.color === orderItem.color && c.capacity === orderItem.capacity
+    );
+    if (idx >= 0) {
+        product.combinations[idx].stock -= orderItem.quantity;
+    }
+}
+
+await productRef.update({
+    stock: newStock,
+    combinations: product.combinations
+});
+```
+
+### Triggering Updates
+
+<Warning>
+**Critical**: Always update `updatedAt` when modifying products to trigger SmartProductSync delta updates.
+</Warning>
+
+```javascript
+await productRef.update({
+    stock: newStock,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+});
+```
+
+## Security Rules
+
+Recommended Firestore security rules:
+
+```javascript
+match /products/{productId} {
+  // Allow public read for active products
+  allow read: if resource.data.status == 'active';
+  
+  // Only admins can write
+  allow write: if request.auth != null && 
+               get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+}
+```
+
+## Indexes
+
+Required composite indexes:
+
+```javascript
+// Category + Status
+products: [category ASC, status ASC]
+
+// Updated timestamp (for delta sync)
+products: [updatedAt DESC, status ASC]
+
+// Promo flags
+products: [isHeroPromo ASC, status ASC]
+products: [isNewLaunch ASC, status ASC]
+products: [promoEndsAt ASC]
+```
+
+## Related Documentation
+
+- [SmartProductSync System](/frontend/smart-sync)
+- [Frontend Components](/frontend/components)
+- [Orders Collection](/api/collections/orders)

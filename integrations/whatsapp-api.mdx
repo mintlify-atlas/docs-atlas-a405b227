@@ -1,0 +1,745 @@
+---
+title: 'WhatsApp Business API'
+description: 'Complete guide to WhatsApp Business API integration'
+icon: 'whatsapp'
+---
+
+## Overview
+
+The WhatsApp Business API integration enables real-time customer communication through WhatsApp, including automated responses, media sharing, and conversation management.
+
+<Info>This integration uses the official Meta (Facebook) WhatsApp Business Platform.</Info>
+
+## Prerequisites
+
+<Card title="Required Setup" icon="key">
+  - Meta Business Account
+  - WhatsApp Business Account
+  - Phone Number ID
+  - API Access Token
+  - Webhook verification token
+</Card>
+
+## Configuration
+
+### Environment Variables
+
+Add these to your Firebase Functions configuration:
+
+```bash
+WHATSAPP_VERIFY_TOKEN=your_webhook_verify_token
+WHATSAPP_API_TOKEN=your_whatsapp_api_token
+WHATSAPP_PHONE_ID=your_phone_number_id
+```
+
+### Code Configuration
+
+From `~/workspace/source/functions/whatsapp.js:7-10`:
+
+```javascript
+const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
+const API_TOKEN = process.env.WHATSAPP_API_TOKEN;
+const PHONE_ID = process.env.WHATSAPP_PHONE_ID;
+```
+
+## API Architecture
+
+The integration consists of:
+
+1. **Webhook** - Receives incoming messages and verifies webhook setup
+2. **Send Message** - Sends outgoing messages from admin panel
+3. **Media Handler** - Downloads and uploads multimedia files
+4. **Auto-Reply Bot** - Responds outside business hours
+
+## Webhook Setup
+
+### Function: `webhook`
+
+Handles both webhook verification (GET) and message reception (POST).
+
+From `~/workspace/source/functions/whatsapp.js:65-173`:
+
+### Webhook Verification (GET)
+
+Meta sends a GET request to verify your webhook:
+
+```javascript
+if (req.method === "GET") {
+  if (req.query["hub.mode"] === "subscribe" && 
+      req.query["hub.verify_token"] === VERIFY_TOKEN) {
+    res.status(200).send(req.query["hub.challenge"]);
+  } else {
+    res.sendStatus(403);
+  }
+  return;
+}
+```
+
+**Setup in Meta Dashboard:**
+1. Go to WhatsApp > Configuration
+2. Add webhook URL: `https://your-function-url/webhook`
+3. Set verify token: Match your `WHATSAPP_VERIFY_TOKEN`
+4. Subscribe to `messages` events
+
+### Message Reception (POST)
+
+Processes incoming messages from customers:
+
+```javascript
+if (req.method === "POST") {
+  const body = req.body;
+  
+  if (body.object && body.entry?.[0]?.changes?.[0]?.value?.messages) {
+    const change = body.entry[0].changes[0].value;
+    const message = change.messages[0];
+    const phoneNumber = message.from;
+    const userName = change.contacts[0]?.profile?.name || "Usuario";
+    const type = message.type;
+    
+    let content = "";
+    let mediaUrl = null;
+    
+    // Process message based on type
+    if (type === "text") {
+      content = message.text.body;
+    } else if (type === "image") {
+      content = message.image.caption || "📷 Imagen recibida";
+      mediaUrl = await downloadAndUploadMedia(
+        message.image.id, 
+        message.image.mime_type, 
+        phoneNumber
+      );
+    } else if (type === "audio") {
+      content = "🎤 Audio recibido";
+      mediaUrl = await downloadAndUploadMedia(
+        message.audio.id,
+        message.audio.mime_type,
+        phoneNumber
+      );
+    } else {
+      content = `[Archivo: ${type}]`;
+    }
+    
+    // Save to Firestore (covered below)
+    // ...
+  }
+  
+  res.sendStatus(200);
+}
+```
+
+## Message Types
+
+### Supported Incoming Types
+
+<CardGroup cols={3}>
+  <Card title="Text" icon="message">
+    Plain text messages
+  </Card>
+  <Card title="Image" icon="image">
+    Photos with optional caption
+  </Card>
+  <Card title="Audio" icon="microphone">
+    Voice messages and audio files
+  </Card>
+</CardGroup>
+
+### Message Type Handling
+
+From `~/workspace/source/functions/whatsapp.js:87-96`:
+
+```javascript
+if (type === "text") {
+  content = message.text.body;
+} else if (type === "image") {
+  content = message.image.caption || "📷 Imagen recibida";
+  mediaUrl = await downloadAndUploadMedia(
+    message.image.id,
+    message.image.mime_type,
+    phoneNumber
+  );
+} else if (type === "audio") {
+  content = "🎤 Audio recibido";
+  mediaUrl = await downloadAndUploadMedia(
+    message.audio.id,
+    message.audio.mime_type,
+    phoneNumber
+  );
+} else {
+  content = `[Archivo: ${type}]`;
+}
+```
+
+## Media Handling
+
+### Function: `downloadAndUploadMedia`
+
+Downloads media from Meta and uploads to Firebase Storage.
+
+From `~/workspace/source/functions/whatsapp.js:41-62`:
+
+```javascript
+async function downloadAndUploadMedia(mediaId, mimeType, phoneNumber) {
+  try {
+    // 1. Get media URL from Meta
+    const metaRes = await axios.get(
+      `https://graph.facebook.com/v17.0/${mediaId}`,
+      {
+        headers: { 'Authorization': `Bearer ${API_TOKEN}` }
+      }
+    );
+    
+    // 2. Download media file
+    const fileRes = await axios.get(metaRes.data.url, {
+      responseType: 'arraybuffer',
+      headers: { 'Authorization': `Bearer ${API_TOKEN}` }
+    });
+    
+    // 3. Upload to Firebase Storage
+    const ext = mimeType.split('/')[1].split(';')[0] || 'bin';
+    const fileName = `chats/${phoneNumber}/${Date.now()}_${mediaId}.${ext}`;
+    const file = storage.bucket().file(fileName);
+    
+    await file.save(fileRes.data, {
+      metadata: { contentType: mimeType }
+    });
+    
+    // 4. Make public and return URL
+    await file.makePublic();
+    return file.publicUrl();
+    
+  } catch (error) {
+    console.error("Error media:", error);
+    return null;
+  }
+}
+```
+
+### Media Storage Structure
+
+```
+gs://your-bucket/
+└── chats/
+    └── {phoneNumber}/
+        ├── 1234567890_mediaId.jpg
+        ├── 1234567891_mediaId.mp3
+        └── 1234567892_mediaId.mp4
+```
+
+## Auto-Reply Bot
+
+### Business Hours Configuration
+
+Automatically responds outside business hours (8 PM - 7 AM).
+
+From `~/workspace/source/functions/whatsapp.js:100-137`:
+
+```javascript
+// Get current time in Colombia
+const now = new Date();
+const bogotaHour = parseInt(
+  now.toLocaleString("en-US", {
+    timeZone: "America/Bogota",
+    hour: "numeric",
+    hour12: false
+  })
+);
+
+// Check if outside business hours
+// 8 PM (20) to 7 AM (7)
+const isOutOfOffice = bogotaHour >= 20 || bogotaHour < 7;
+
+if (isOutOfOffice) {
+  const docSnap = await chatRef.get();
+  const lastAutoReply = docSnap.exists 
+    ? docSnap.data().lastAutoReply?.toDate() 
+    : null;
+  
+  // Only reply if 12+ hours since last auto-reply
+  const hoursSinceLast = lastAutoReply 
+    ? (now - lastAutoReply) / (1000 * 60 * 60) 
+    : 24;
+  
+  if (hoursSinceLast > 12) {
+    const replyText = "Hola 👋, gracias por escribir a PixelTech.\n\n🌙 Nuestro equipo descansa en este momento, pero hemos recibido tu mensaje y te responderemos a primera hora de la mañana.";
+    
+    // Send auto-reply
+    const replyId = await sendToMeta(phoneNumber, replyText, 'text');
+    
+    // Save to chat history
+    await chatRef.collection('messages').add({
+      type: 'outgoing',
+      content: replyText,
+      messageType: 'text',
+      whatsappId: replyId,
+      isAutoReply: true,
+      timestamp: admin.firestore.Timestamp.now()
+    });
+    
+    // Update last auto-reply timestamp
+    await chatRef.set({
+      lastAutoReply: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+  }
+}
+```
+
+### Auto-Reply Features
+
+<Check>**Time-based** - Activates outside 7 AM - 8 PM</Check>
+<Check>**Rate-limited** - Maximum one auto-reply per 12 hours</Check>
+<Check>**Non-intrusive** - Keeps chat marked as unread for staff</Check>
+<Check>**Timezone-aware** - Uses Colombia (America/Bogota) timezone</Check>
+
+### Customizing Business Hours
+
+```javascript
+// Current: 8 PM (20:00) to 7 AM (07:00)
+const isOutOfOffice = bogotaHour >= 20 || bogotaHour < 7;
+
+// Example: 6 PM (18:00) to 8 AM (08:00)
+const isOutOfOffice = bogotaHour >= 18 || bogotaHour < 8;
+
+// Example: 10 PM (22:00) to 6 AM (06:00)
+const isOutOfOffice = bogotaHour >= 22 || bogotaHour < 6;
+```
+
+## Firestore Data Structure
+
+### Chat Document
+
+From `~/workspace/source/functions/whatsapp.js:140-156`:
+
+```javascript
+await chatRef.set({
+  clientName: userName,
+  phoneNumber: phoneNumber,
+  lastMessage: content,
+  lastMessageAt: admin.firestore.FieldValue.serverTimestamp(),
+  lastCustomerInteraction: admin.firestore.FieldValue.serverTimestamp(),
+  unread: true,
+  platform: 'whatsapp',
+  status: 'open',
+  lastAutoReply: admin.firestore.FieldValue.serverTimestamp() // Only if auto-reply sent
+}, { merge: true });
+```
+
+**Collection:** `chats`  
+**Document ID:** Customer phone number
+
+<ResponseField name="clientName" type="string">
+  Customer name from WhatsApp profile
+</ResponseField>
+
+<ResponseField name="phoneNumber" type="string">
+  Customer phone number (with country code)
+</ResponseField>
+
+<ResponseField name="lastMessage" type="string">
+  Preview of last message
+</ResponseField>
+
+<ResponseField name="lastMessageAt" type="timestamp">
+  Timestamp of last message
+</ResponseField>
+
+<ResponseField name="lastCustomerInteraction" type="timestamp">
+  Last time customer sent a message
+</ResponseField>
+
+<ResponseField name="unread" type="boolean">
+  Whether chat has unread messages
+</ResponseField>
+
+<ResponseField name="platform" type="string">
+  Always "whatsapp"
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Chat status: "open" or "closed"
+</ResponseField>
+
+<ResponseField name="lastAutoReply" type="timestamp">
+  When last auto-reply was sent
+</ResponseField>
+
+### Message Document
+
+From `~/workspace/source/functions/whatsapp.js:160-167`:
+
+```javascript
+await chatRef.collection('messages').add({
+  type: 'incoming', // or 'outgoing'
+  content: content,
+  mediaUrl: mediaUrl, // null for text-only
+  messageType: type, // 'text', 'image', 'audio'
+  whatsappId: message.id,
+  timestamp: admin.firestore.Timestamp.now(),
+  isAutoReply: false // true for auto-replies
+});
+```
+
+**Collection:** `chats/{phoneNumber}/messages`
+
+<ResponseField name="type" type="string">
+  "incoming" or "outgoing"
+</ResponseField>
+
+<ResponseField name="content" type="string">
+  Message text content
+</ResponseField>
+
+<ResponseField name="mediaUrl" type="string">
+  Public URL to media file (null for text)
+</ResponseField>
+
+<ResponseField name="messageType" type="string">
+  "text", "image", "audio", etc.
+</ResponseField>
+
+<ResponseField name="whatsappId" type="string">
+  WhatsApp message ID
+</ResponseField>
+
+<ResponseField name="timestamp" type="timestamp">
+  When message was sent/received
+</ResponseField>
+
+<ResponseField name="isAutoReply" type="boolean">
+  Whether this was an automatic response
+</ResponseField>
+
+## Sending Messages
+
+### Function: `sendMessage`
+
+Sends messages from admin panel to customers.
+
+From `~/workspace/source/functions/whatsapp.js:176-205`:
+
+```javascript
+exports.sendMessage = onCall(async (request) => {
+  if (!request.auth) {
+    throw new HttpsError('unauthenticated', 'Login requerido.');
+  }
+  
+  const { phoneNumber, message, type, mediaUrl } = request.data;
+  
+  try {
+    // Send via Meta API
+    const waId = await sendToMeta(phoneNumber, message, type, mediaUrl);
+    
+    // Update chat header
+    const chatRef = db.collection('chats').doc(phoneNumber);
+    await chatRef.set({
+      lastMessage: type === 'image' ? '📷 Imagen enviada' : `tú: ${message}`,
+      lastMessageAt: admin.firestore.FieldValue.serverTimestamp(),
+      unread: false
+    }, { merge: true });
+    
+    // Save to message history
+    await chatRef.collection('messages').add({
+      type: 'outgoing',
+      content: message || (type === 'image' ? 'Imagen enviada' : ''),
+      mediaUrl: mediaUrl || null,
+      messageType: type || 'text',
+      whatsappId: waId,
+      timestamp: admin.firestore.Timestamp.now()
+    });
+    
+    return { success: true };
+  } catch (error) {
+    throw new HttpsError('internal', error.message);
+  }
+});
+```
+
+### Parameters
+
+<ParamField path="phoneNumber" type="string" required>
+  Customer phone number (with country code)
+</ParamField>
+
+<ParamField path="message" type="string" required>
+  Message text content
+</ParamField>
+
+<ParamField path="type" type="string" default="text">
+  Message type: "text" or "image"
+</ParamField>
+
+<ParamField path="mediaUrl" type="string">
+  Public URL to image (required if type="image")
+</ParamField>
+
+### Example Usage
+
+```javascript
+const sendMessage = firebase.functions().httpsCallable('sendMessage');
+
+// Send text message
+await sendMessage({
+  phoneNumber: '573001234567',
+  message: 'Hola! Gracias por tu pedido.',
+  type: 'text'
+});
+
+// Send image
+await sendMessage({
+  phoneNumber: '573001234567',
+  message: 'Aquí está tu factura',
+  type: 'image',
+  mediaUrl: 'https://example.com/invoice.jpg'
+});
+```
+
+## Sending via Meta API
+
+### Helper Function: `sendToMeta`
+
+Core function for sending messages via WhatsApp Business API.
+
+From `~/workspace/source/functions/whatsapp.js:15-38`:
+
+```javascript
+async function sendToMeta(phoneNumber, message, type = 'text', mediaUrl = null) {
+  const url = `https://graph.facebook.com/v17.0/${PHONE_ID}/messages`;
+  
+  let body = {
+    messaging_product: 'whatsapp',
+    to: phoneNumber,
+    type: type
+  };
+  
+  if (type === 'image') {
+    body.image = {
+      link: mediaUrl,
+      caption: message || ""
+    };
+  } else {
+    body.text = { body: message };
+  }
+  
+  try {
+    const response = await axios.post(url, body, {
+      headers: {
+        'Authorization': `Bearer ${API_TOKEN}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    return response.data.messages[0].id;
+  } catch (error) {
+    console.error("Error Meta API:", error.response?.data || error.message);
+    throw new Error("Fallo al enviar mensaje a WhatsApp");
+  }
+}
+```
+
+### API Endpoint
+
+```
+POST https://graph.facebook.com/v17.0/{PHONE_ID}/messages
+```
+
+### Request Headers
+
+```json
+{
+  "Authorization": "Bearer {API_TOKEN}",
+  "Content-Type": "application/json"
+}
+```
+
+### Text Message Payload
+
+```json
+{
+  "messaging_product": "whatsapp",
+  "to": "573001234567",
+  "type": "text",
+  "text": {
+    "body": "Your message here"
+  }
+}
+```
+
+### Image Message Payload
+
+```json
+{
+  "messaging_product": "whatsapp",
+  "to": "573001234567",
+  "type": "image",
+  "image": {
+    "link": "https://example.com/image.jpg",
+    "caption": "Optional caption"
+  }
+}
+```
+
+## Template Messages
+
+WhatsApp requires pre-approved templates for initiating conversations.
+
+### Creating Templates
+
+1. Go to Meta Business Manager
+2. Navigate to WhatsApp > Message Templates
+3. Create template with variables
+4. Wait for approval (usually 24-48 hours)
+
+### Sending Template Messages
+
+```javascript
+async function sendTemplate(phoneNumber, templateName, languageCode, parameters) {
+  const url = `https://graph.facebook.com/v17.0/${PHONE_ID}/messages`;
+  
+  const body = {
+    messaging_product: 'whatsapp',
+    to: phoneNumber,
+    type: 'template',
+    template: {
+      name: templateName,
+      language: {
+        code: languageCode // e.g., 'es' or 'es_CO'
+      },
+      components: [
+        {
+          type: 'body',
+          parameters: parameters.map(p => ({ type: 'text', text: p }))
+        }
+      ]
+    }
+  };
+  
+  const response = await axios.post(url, body, {
+    headers: {
+      'Authorization': `Bearer ${API_TOKEN}`,
+      'Content-Type': 'application/json'
+    }
+  });
+  
+  return response.data.messages[0].id;
+}
+
+// Example usage
+await sendTemplate(
+  '573001234567',
+  'order_confirmation',
+  'es',
+  ['Juan', 'ORD-12345', '$150,000']
+);
+```
+
+## Error Handling
+
+<AccordionGroup>
+  <Accordion title="Webhook verification failed (403)">
+    **Cause:** Verify token mismatch
+    
+    **Solution:** Ensure `WHATSAPP_VERIFY_TOKEN` matches Meta dashboard configuration
+  </Accordion>
+
+  <Accordion title="Failed to send message to WhatsApp">
+    **Cause:** Invalid API token or phone ID
+    
+    **Solution:**
+    - Verify `WHATSAPP_API_TOKEN` is valid
+    - Check `WHATSAPP_PHONE_ID` matches your business number
+    - Ensure phone number is registered for WhatsApp Business API
+  </Accordion>
+
+  <Accordion title="Media download failed">
+    **Cause:** Invalid media ID or expired URL
+    
+    **Solution:** Media URLs from Meta expire quickly. Download and upload immediately.
+  </Accordion>
+
+  <Accordion title="unauthenticated: Login requerido">
+    **Cause:** Admin not authenticated when calling sendMessage
+    
+    **Solution:** Ensure user is logged in via Firebase Auth before calling function
+  </Accordion>
+</AccordionGroup>
+
+## Security Best Practices
+
+<Check>**Validate webhook signature** - Verify requests come from Meta (add X-Hub-Signature validation)</Check>
+<Check>**Secure tokens** - Store tokens in environment variables, never in code</Check>
+<Check>**Authenticate admin** - Require Firebase Auth for sendMessage function</Check>
+<Check>**Rate limiting** - Auto-reply limits prevent spam</Check>
+<Check>**Media validation** - Check file types and sizes before uploading</Check>
+
+## Testing
+
+### Local Testing with Ngrok
+
+1. Install ngrok: `npm install -g ngrok`
+2. Start Firebase emulator: `firebase emulators:start`
+3. Create tunnel: `ngrok http 5001`
+4. Update Meta webhook URL to ngrok URL
+5. Send test messages to your business number
+
+### Test Checklist
+
+- [ ] Webhook verification succeeds
+- [ ] Receive text messages
+- [ ] Receive image messages with caption
+- [ ] Receive audio messages
+- [ ] Media uploaded to Firebase Storage
+- [ ] Auto-reply sent outside business hours
+- [ ] Auto-reply rate limiting works
+- [ ] Send text message from admin panel
+- [ ] Send image message from admin panel
+- [ ] Messages saved to Firestore correctly
+
+## Monitoring
+
+### Key Metrics
+
+- Message delivery rate
+- Average response time
+- Media upload success rate
+- Auto-reply trigger frequency
+- Unread message count
+
+### Logging
+
+```javascript
+console.log("📥 Incoming message:", phoneNumber, type);
+console.log("📤 Sending message to:", phoneNumber);
+console.error("❌ Error Meta API:", error.response?.data);
+console.error("❌ Error media:", error);
+console.log("🤖 Auto-reply sent to:", phoneNumber);
+```
+
+## Rate Limits
+
+WhatsApp Business API has rate limits:
+
+| Tier | Messages per day |
+|------|------------------|
+| Tier 1 | 1,000 |
+| Tier 2 | 10,000 |
+| Tier 3 | 100,000 |
+| Tier 4 | Unlimited |
+
+Your tier increases automatically based on message quality and volume.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Chat Management" icon="comments" href="/admin/whatsapp">
+    Manage customer conversations
+  </Card>
+  <Card title="Payment Gateways" icon="credit-card" href="/integrations/payment-gateways">
+    Accept payments via WhatsApp
+  </Card>
+  <Card title="Order Management" icon="box" href="/admin/orders">
+    Process WhatsApp orders
+  </Card>
+  <Card title="Meta Documentation" icon="book" href="https://developers.facebook.com/docs/whatsapp" color="blue">
+    Official WhatsApp API docs
+  </Card>
+</CardGroup>

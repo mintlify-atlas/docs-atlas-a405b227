@@ -1,0 +1,403 @@
+---
+title: 'Payment Cloud Functions'
+description: 'Payment gateway integrations for MercadoPago, ADDI, Sistecrédito, and Cash on Delivery'
+icon: 'credit-card'
+---
+
+## Overview
+
+PixelTech integrates multiple payment methods through Firebase Cloud Functions. Each gateway creates orders in Firestore with status `PENDIENTE_PAGO`, processes payment confirmations via webhooks, and updates inventory automatically.
+
+## MercadoPago Integration
+
+### createMercadoPagoPreference
+
+Creates a payment preference and returns a checkout URL.
+
+**Location**: `functions/mercadopago.js:18-165`
+
+**Function Signature**:
+```javascript
+exports.createPreference = async (data, context)
+```
+
+<ParamField body="data" type="object" required>
+  Request payload from client
+  
+  <Expandable title="properties">
+    <ParamField body="items" type="array" required>
+      Array of cart items with `id`, `quantity`, `color`, `capacity`
+    </ParamField>
+    <ParamField body="shippingCost" type="number">
+      Shipping cost in COP (default: 0)
+    </ParamField>
+    <ParamField body="buyerInfo" type="object" required>
+      Customer information: `name`, `email`, `phone`, `address`
+    </ParamField>
+    <ParamField body="extraData" type="object">
+      Additional data: `userName`, `clientDoc`, `shippingData`, `needsInvoice`
+    </ParamField>
+    <ParamField body="userToken" type="string" required>
+      Firebase ID token for authentication
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="response" type="object">
+  <Expandable title="properties">
+    <ResponseField name="preferenceId" type="string">
+      MercadoPago preference ID
+    </ResponseField>
+    <ResponseField name="initPoint" type="string">
+      Checkout URL to redirect user
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+**Implementation Details**:
+
+1. **Authentication**: Verifies user token using Firebase Auth
+2. **Price Validation**: Fetches real prices from Firestore products collection
+3. **Order Creation**: Creates order with status `PENDIENTE_PAGO` in Firestore
+4. **Expiration**: Sets 30-minute expiration on payment link
+5. **Webhook Registration**: Configures notification URL for payment confirmations
+
+**Example Usage**:
+```javascript
+const result = await createMercadoPagoPreference({
+  items: [
+    { id: 'prod123', quantity: 2, color: 'negro', capacity: '128GB' }
+  ],
+  shippingCost: 15000,
+  buyerInfo: {
+    name: 'Juan Pérez',
+    email: 'juan@example.com',
+    phone: '3001234567',
+    address: 'Calle 123 #45-67'
+  },
+  userToken: 'eyJhbGc...',
+  extraData: { clientDoc: '1234567890' }
+});
+
+// Result: { preferenceId: 'MP-123456', initPoint: 'https://...' }
+```
+
+### mercadoPagoWebhook
+
+Processes payment notifications from MercadoPago.
+
+**Location**: `functions/mercadopago.js:174-326`
+
+**Endpoint**: `POST /mercadoPagoWebhook`
+
+**Webhook Flow**:
+
+1. Receives notification with `paymentId` from MercadoPago
+2. Fetches payment status from MercadoPago API
+3. If `status === 'approved'`:
+   - Updates order status to `PAGADO`
+   - Deducts inventory from products collection
+   - Credits payment amount to treasury account
+   - Creates income record in expenses collection
+   - Generates remission document
+4. If `status === 'rejected'`:
+   - Updates order status to `RECHAZADO`
+
+**Code Example** (from `mercadopago.js:204-305`):
+```javascript
+if (status === 'approved') {
+    await db.runTransaction(async (t) => {
+        // 1. Deduct inventory
+        for(const i of oData.items) {
+            const pRef = db.collection('products').doc(i.id);
+            const pDoc = await t.get(pRef);
+            let newStock = (pData.stock||0) - (i.quantity||1);
+            t.update(pRef, { stock: newStock });
+        }
+        
+        // 2. Credit treasury account
+        const accDoc = await t.get(
+            db.collection('accounts').where('gatewayLink', '==', 'MERCADOPAGO').limit(1)
+        );
+        t.update(accDoc.ref, { 
+            balance: accDoc.data().balance + oData.total 
+        });
+        
+        // 3. Update order
+        t.update(orderRef, { 
+            status: 'PAGADO', 
+            paymentStatus: 'PAID' 
+        });
+    });
+}
+```
+
+---
+
+## ADDI Integration (Buy Now, Pay Later)
+
+### createAddiCheckout
+
+Creates an ADDI financing application.
+
+**Location**: `functions/addi.js:59-252`
+
+**Function Signature**:
+```javascript
+exports.createAddiCheckout = async (data, context)
+```
+
+<ParamField body="Parameters" type="same as MercadoPago">
+  Accepts identical payload structure as `createMercadoPagoPreference`
+</ParamField>
+
+<ResponseField name="response" type="object">
+  <ResponseField name="initPoint" type="string">
+    ADDI checkout URL for financing application
+  </ResponseField>
+</ResponseField>
+
+**Key Differences**:
+- Requires OAuth token from ADDI Auth service
+- Normalizes customer data (removes accents, formats phone numbers)
+- Posts to ADDI API endpoint: `https://api.addi.com/v1/online-applications`
+
+**Implementation** (from `addi.js:163-219`):
+```javascript
+const addiToken = await getAddiToken();
+
+const addiPayload = {
+    orderId: firebaseOrderId,
+    totalAmount: totalAmount.toFixed(1),
+    currency: "COP",
+    items: dbItems.map(i => ({
+        sku: i.id,
+        name: removeAccents(i.name),
+        quantity: String(i.quantity),
+        unitPrice: Math.round(i.price)
+    })),
+    client: {
+        idType: "CC",
+        idNumber: cleanDoc,
+        firstName: removeAccents(firstName),
+        email: email.trim().toLowerCase(),
+        cellphone: cellNumber
+    },
+    allyUrlRedirection: {
+        callbackUrl: WEBHOOK_URL,
+        redirectionUrl: `https://pixeltechcol.com/shop/success.html`
+    }
+};
+
+const response = await axios.post(
+    `${ADDI_BASE_URL}/v1/online-applications`, 
+    addiPayload
+);
+```
+
+### addiWebhook
+
+Processes ADDI payment status updates.
+
+**Location**: `functions/addi.js:260-376`
+
+**Endpoint**: `POST /addiWebhook`
+
+**Webhook Payload**:
+```json
+{
+  "orderId": "abc123",
+  "status": "APPROVED",
+  "applicationId": "addi-app-456"
+}
+```
+
+**Duplicate Prevention** (from `addi.js:280-284`):
+```javascript
+if (oData.paymentStatus === 'PAID' || oData.status === 'PAGADO') {
+    console.log(`⚠️ Webhook duplicado ignorado.`);
+    return; // Exit transaction without processing
+}
+```
+
+---
+
+## Sistecrédito Integration
+
+### createSistecreditoCheckout
+
+Creates a Sistecrédito payment link.
+
+**Location**: `functions/sistecredito.js:22-167`
+
+**Function Signature**:
+```javascript
+exports.createSistecreditoCheckout = async (data, context)
+```
+
+<ParamField body="Parameters" type="same structure">
+  Identical to MercadoPago/ADDI
+</ParamField>
+
+**API Request** (from `sistecredito.js:113-156`):
+```javascript
+const payload = {
+    invoice: firebaseOrderId,
+    description: `Compra en PixelTech - Orden ${firebaseOrderId.slice(0,8)}`,
+    paymentMethod: {
+        paymentMethodId: 2,  // PSE
+        bankCode: 1,
+        userType: 0
+    },
+    currency: "COP",
+    value: Math.round(totalAmount),
+    urlResponse: `https://pixeltechcol.com/shop/success.html`,
+    urlConfirmation: SC_WEBHOOK_URL,
+    client: {
+        docType: "CC",
+        document: cleanDoc,
+        name: removeAccents(firstName),
+        email: email.trim().toLowerCase(),
+        city: cleanCity,
+        address: removeAccents(shippingData.address)
+    }
+};
+
+const response = await axios.post(
+    `${SC_BASE_URL}/create`, 
+    payload, 
+    {
+        headers: {
+            'Ocp-Apim-Subscription-Key': SC_API_KEY,
+            'ApplicationKey': SC_APP_KEY
+        }
+    }
+);
+```
+
+### sistecreditoWebhook
+
+**Location**: `functions/sistecredito.js:172-289`
+
+**Endpoint**: `POST /sistecreditoWebhook`
+
+**Status Mapping**:
+- `Approved` → Order status: `PAGADO`
+- `Rejected` / `Cancelled` / `Failed` → Order status: `RECHAZADO`
+
+---
+
+## Cash on Delivery (COD)
+
+### createCODOrder
+
+Creates an order for cash payment on delivery.
+
+**Location**: `functions/cod.js:4-136`
+
+**Function Signature**:
+```javascript
+exports.createCODOrder = async (data, context)
+```
+
+**Key Differences from Online Payments**:
+
+1. **Immediate Stock Deduction**: Inventory is reserved immediately
+2. **Status**: Order created with status `PENDIENTE` (not `PENDIENTE_PAGO`)
+3. **No Webhook**: Payment confirmed manually by admin
+
+**Transaction Logic** (from `cod.js:45-128`):
+```javascript
+await db.runTransaction(async (t) => {
+    const pendingUpdates = [];
+    
+    // Phase 1: Read and calculate
+    for (const item of rawItems) {
+        const pDoc = await t.get(pRef);
+        let newStock = (pData.stock || 0) - qty;
+        
+        if (newStock < 0) throw new Error(`Sin stock: ${pData.name}`);
+        
+        pendingUpdates.push({
+            ref: pRef,
+            data: { stock: newStock }
+        });
+    }
+    
+    // Phase 2: Write all changes
+    for (const update of pendingUpdates) {
+        t.update(update.ref, update.data);
+    }
+    
+    t.set(newOrderRef, orderData);
+    t.set(remissionRef, remissionData);
+});
+```
+
+<Warning>
+**Important**: COD orders deduct stock immediately. If customer cancels, admin must manually restore inventory.
+</Warning>
+
+---
+
+## Common Payment Flow
+
+All payment methods follow this pattern:
+
+<Steps>
+  <Step title="Client Calls Cloud Function">
+    Frontend sends cart items, buyer info, and user token
+  </Step>
+  <Step title="Function Creates Order">
+    Order saved to Firestore with status `PENDIENTE_PAGO`
+  </Step>
+  <Step title="User Redirected to Gateway">
+    Customer completes payment on external platform
+  </Step>
+  <Step title="Webhook Receives Confirmation">
+    Gateway POSTs payment result to webhook endpoint
+  </Step>
+  <Step title="Order Finalized">
+    If approved: inventory deducted, order marked `PAGADO`, remission created
+  </Step>
+</Steps>
+
+## Error Handling
+
+All functions use Firebase HttpsError for consistent error responses:
+
+```javascript
+if (!items || !items.length) {
+    throw new functions.https.HttpsError('invalid-argument', 'Cart is empty');
+}
+
+try {
+    // Payment logic
+} catch (error) {
+    console.error("Payment Error:", error);
+    throw new functions.https.HttpsError('internal', error.message);
+}
+```
+
+## Security Features
+
+<CardGroup cols={2}>
+  <Card title="Price Validation" icon="shield-check">
+    All prices fetched from Firestore to prevent client-side tampering
+  </Card>
+  <Card title="User Authentication" icon="lock">
+    Firebase ID tokens verified before processing orders
+  </Card>
+  <Card title="Webhook Verification" icon="key">
+    Payment status confirmed with gateway API (not just webhook payload)
+  </Card>
+  <Card title="Atomic Transactions" icon="database">
+    Firestore transactions ensure inventory and payment consistency
+  </Card>
+</CardGroup>
+
+## Related Documentation
+
+- [Order Functions](/api/orders)
+- [Email Notifications](/api/emails)
+- [Collections: Orders](/api/collections/orders)

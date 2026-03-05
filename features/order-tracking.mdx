@@ -1,0 +1,751 @@
+---
+title: Order Tracking
+description: Real-time order status updates, delivery tracking, and warranty registration
+---
+
+## Overview
+
+PixelTech's order tracking system provides customers with **real-time status updates**, **visual progress timelines**, **shipping tracking integration**, and **warranty claim management** - all synchronized automatically via Firebase.
+
+## Accessing Order Details
+
+### From Profile Page
+
+<Steps>
+  <Step title="View Order History">
+    Navigate to profile page (`/profile.html`)
+  </Step>
+  <Step title="Browse Orders">
+    See list of all orders with status badges
+  </Step>
+  <Step title="Click Any Order">
+    Navigate to detailed order view (`/shop/order-detail.html?id={orderId}`)
+  </Step>
+  <Step title="Real-Time Loading">
+    Order details load instantly from cache, then sync with Firebase
+  </Step>
+</Steps>
+
+### From Success Page
+
+After checkout:
+- Customer redirected to `/shop/success.html?order={orderId}`
+- Success page shows celebration animation
+- "View Order Details" button links to order detail page
+- Email notification sent with order link
+
+## Order Detail Page
+
+### Information Displayed
+
+The order detail page shows comprehensive information:
+
+<CardGroup cols={2}>
+  <Card title="Order Header" icon="hashtag">
+    - Order ID (e.g., "#ABC123DE")
+    - Order date and time
+    - Current status badge
+    - Visual progress timeline
+  </Card>
+  <Card title="Buyer Information" icon="user">
+    - Customer name
+    - Email address
+    - Phone number
+    - Delivery address
+    - City and department
+  </Card>
+  <Card title="Payment Details" icon="credit-card">
+    - Payment method used
+    - Transaction status
+    - Payment processor icons
+    - Approval indicators
+  </Card>
+  <Card title="Product List" icon="box">
+    - Product images
+    - Names and specifications
+    - Color/capacity variants
+    - Quantities and prices
+    - Warranty status per item
+  </Card>
+</CardGroup>
+
+### Real-Time Order Sync
+
+**Smart Cache + Live Updates**
+
+```javascript
+async function initSmartRealtimeOrder() {
+  // 1. INSTANT LOAD: Check localStorage cache
+  const cachedRaw = localStorage.getItem('pixeltech_user_orders');
+  if (cachedRaw) {
+    const parsed = JSON.parse(cachedRaw);
+    if (parsed.map && parsed.map[orderId]) {
+      currentOrder = parsed.map[orderId];
+      renderAllOrderData(currentOrder); // Immediate display
+    }
+  }
+  
+  // 2. REAL-TIME SYNC: Connect to Firebase
+  unsubscribeOrder = onSnapshot(doc(db, "orders", orderId), (snap) => {
+    const freshData = { id: snap.id, ...snap.data() };
+    
+    // Only re-render if something actually changed
+    if (JSON.stringify(currentOrder) !== JSON.stringify(freshData)) {
+      currentOrder = freshData;
+      renderAllOrderData(currentOrder);
+      updateOrderInLocalCache(currentOrder); // Silent cache update
+    }
+  });
+}
+```
+
+<Info>
+The order page loads instantly from cache, then establishes a real-time connection. If the admin updates the order status, the customer sees the change immediately without refreshing.
+</Info>
+
+## Order Status Timeline
+
+### Visual Progress Indicator
+
+The timeline shows order progress through four main stages:
+
+```
+    ○━━━━●━━━━●━━━━●
+  PENDING  CONFIRMED  PREPARED  DISPATCHED
+```
+
+**Timeline Features:**
+
+- **Completed Steps**: Black circles with white icons
+- **Current Step**: Cyan glowing circle with animated icon
+- **Future Steps**: Gray circles
+- **Progress Bar**: Animated fill showing percentage complete
+
+### Status Stages
+
+<Tabs>
+  <Tab title="Pending Payment">
+    **Awaiting Payment Confirmation**
+    
+    <Card icon="clock" color="yellow">
+    **Status:** `PENDIENTE_PAGO`
+    
+    Order is created but payment not yet confirmed. Applicable to:
+    - Cash on Delivery orders (awaiting admin approval)
+    - Bank transfers (awaiting payment verification)
+    - Failed online payments
+    
+    **Customer sees:** Yellow "Pending Payment" badge
+    </Card>
+  </Tab>
+  <Tab title="Confirmed">
+    **Payment Received**
+    
+    <Card icon="check-circle" color="blue">
+    **Status:** `PAGADO`, `CONFIRMADO`, `PENDIENTE`
+    
+    Payment confirmed and order is in queue for processing.
+    
+    - MercadoPago payments automatically move here
+    - ADDI/Sistecrédito approvals trigger this status
+    - Admin manually confirms COD orders
+    
+    **Customer sees:** Blue "Confirmed" badge
+    </Card>
+  </Tab>
+  <Tab title="Being Prepared">
+    **In Warehouse**
+    
+    <Card icon="box-open" color="purple">
+    **Status:** `ALISTAMIENTO`, `ALISTADO`
+    
+    Order is being picked, packed, and prepared for shipment.
+    
+    - Products gathered from inventory
+    - Quality check performed
+    - Packaging and labeling
+    - Serial numbers registered (for warranty)
+    
+    **Customer sees:** Purple "Preparing" badge with animated box icon
+    </Card>
+  </Tab>
+  <Tab title="Dispatched">
+    **En Route to Customer**
+    
+    <Card icon="truck-fast" color="cyan">
+    **Status:** `DESPACHADO`, `EN_RUTA`
+    
+    Order handed to carrier and on its way.
+    
+    - Tracking number assigned
+    - Carrier information displayed
+    - Estimated delivery date shown
+    - **Warranty period begins**
+    
+    **Customer sees:** Cyan "Dispatched" badge, tracking info appears
+    </Card>
+  </Tab>
+  <Tab title="Delivered">
+    **Order Completed**
+    
+    <Card icon="house-circle-check" color="green">
+    **Status:** `ENTREGADO`
+    
+    Customer received the order.
+    
+    - Carrier confirmed delivery
+    - Warranty fully active
+    - Can submit warranty claims
+    - Review/rating prompt (future feature)
+    
+    **Customer sees:** Green "Delivered" badge
+    </Card>
+  </Tab>
+  <Tab title="Cancelled">
+    **Order Cancelled**
+    
+    <Card icon="ban" color="red">
+    **Status:** `CANCELADO`, `RECHAZADO`
+    
+    Order was cancelled or rejected.
+    
+    Reasons:
+    - Customer requested cancellation
+    - Payment failed/declined
+    - Product out of stock
+    - Address verification failed
+    
+    **Customer sees:** Red "Cancelled" badge, timeline replaced with cancellation message
+    </Card>
+  </Tab>
+</Tabs>
+
+### Timeline Implementation
+
+```javascript
+function renderTimeline(currentStatus) {
+  const steps = [
+    { label: 'Pending Payment', icon: 'fa-file-invoice-dollar' },
+    { label: 'Confirmed', icon: 'fa-clipboard-check' },
+    { label: 'Prepared', icon: 'fa-box-open' },
+    { label: 'Dispatched', icon: 'fa-truck-fast' }
+  ];
+  
+  // Determine which step customer is on
+  let activeIndex = 0;
+  if (status === 'PENDIENTE_PAGO') activeIndex = 0;
+  else if (['PAGADO', 'CONFIRMADO'].includes(status)) activeIndex = 1;
+  else if (['ALISTAMIENTO', 'ALISTADO'].includes(status)) activeIndex = 2;
+  else if (['DESPACHADO', 'EN_RUTA', 'ENTREGADO'].includes(status)) activeIndex = 3;
+  
+  const progressPercent = (activeIndex / (steps.length - 1)) * 100;
+  // Render animated progress bar and step indicators
+}
+```
+
+## Shipping Tracking Integration
+
+### Tracking Number Display
+
+Once order is dispatched, tracking information becomes available:
+
+<Card title="Tracking Information Box" icon="truck">
+```
+┌─────────────────────────────────────────┐
+│  🚚 Shipping Tracking                   │
+├─────────────────────────────────────────┤
+│                                         │
+│  Carrier: Servientrega                  │
+│  Tracking #: 123456789012               │
+│                                         │
+│  [Copy Number] [Track on Carrier Site]  │
+└─────────────────────────────────────────┘
+```
+</Card>
+
+### Supported Carriers
+
+System detects carrier and provides direct tracking link:
+
+<Tabs>
+  <Tab title="Servientrega">
+    **Colombia's Leading Carrier**
+    
+    Tracking URL: `https://www.servientrega.com/rastreo-envio`
+    
+    Guide format: 10-13 digits
+  </Tab>
+  <Tab title="Interrápidisimo">
+    **Fast Domestic Shipping**
+    
+    Tracking URL: `https://interrapidisimo.com/sigue-tu-envio/`
+    
+    Guide format: 12 digits
+  </Tab>
+  <Tab title="Coordinadora">
+    **Nationwide Coverage**
+    
+    Tracking URL: `https://coordinadora.com/rastreo-de-guia/`
+    
+    Guide format: 11 digits
+  </Tab>
+  <Tab title="Envía">
+    **Urban Delivery**
+    
+    Tracking URL: `https://envia.co/`
+    
+    Guide format: Variable
+  </Tab>
+  <Tab title="Other Carriers">
+    **Generic Search**
+    
+    Falls back to Google search: `carrier_name + tracking number`
+  </Tab>
+</Tabs>
+
+### Tracking Number Actions
+
+**Copy to Clipboard**
+
+```javascript
+els.copyGuideBtn.onclick = () => {
+  navigator.clipboard.writeText(trackingNumber);
+  // Show success feedback
+  button.innerHTML = '<i class="fa-solid fa-check"></i>';
+  button.classList.add('text-green-500');
+  setTimeout(() => {
+    // Revert after 2 seconds
+    button.innerHTML = 'Copy';
+    button.classList.remove('text-green-500');
+  }, 2000);
+};
+```
+
+**Track on Carrier Site**
+
+Button opens carrier's tracking page in new tab with tracking number pre-filled (where supported).
+
+## Product Warranty System
+
+### How Warranties Work
+
+Each product in an order has warranty tracking:
+
+<Steps>
+  <Step title="Warranty Defined in Product">
+    Each product has warranty period (e.g., 60 days, 12 months)
+  </Step>
+  <Step title="Warranty Starts at Dispatch">
+    Clock starts when order status becomes `DESPACHADO`
+  </Step>
+  <Step title="Warranty Active During Period">
+    Customer can report issues while warranty is valid
+  </Step>
+  <Step title="Warranty Expiration">
+    After period ends, warranty claims no longer accepted
+  </Step>
+</Steps>
+
+### Warranty Period Calculation
+
+```javascript
+function getWarrantyDaysInTotal(item) {
+  let warranty = item.warranty || item.warrantyDays;
+  
+  // Check if warranty is object with time/unit
+  if (typeof warranty === 'object') {
+    const time = parseInt(warranty.time);
+    const unit = warranty.unit.toLowerCase();
+    
+    if (unit.includes('year')) return time * 365;
+    if (unit.includes('month')) return time * 30;
+    if (unit.includes('week')) return time * 7;
+    return time; // days
+  }
+  
+  // Direct number of days
+  return parseInt(warranty) || 60; // Default 60 days
+}
+```
+
+### Warranty Status Badges
+
+Each product in order details shows warranty status:
+
+<Tabs>
+  <Tab title="Before Dispatch">
+    <Card color="gray">
+    **Status:** Order not yet shipped
+    
+    Badge: 🕐 "Warranty starts when dispatched"
+    
+    Customer cannot submit claims yet.
+    </Card>
+  </Tab>
+  <Tab title="Active Warranty">
+    <Card color="green">
+    **Status:** Order dispatched, warranty valid
+    
+    Badge: 🛡️ "Warranty Active (45 days)"
+    
+    Shows remaining days. Customer can report issues.
+    </Card>
+  </Tab>
+  <Tab title="Expired Warranty">
+    <Card color="red">
+    **Status:** Warranty period ended
+    
+    Badge: ❌ "Warranty Expired"
+    
+    Customer can no longer submit warranty claims for this item.
+    </Card>
+  </Tab>
+  <Tab title="No Warranty">
+    <Card color="gray">
+    **Status:** Product sold without commercial warranty
+    
+    Badge: 🚫 "No commercial warranty"
+    
+    Usually applies to accessories or as-is items.
+    </Card>
+  </Tab>
+</Tabs>
+
+## Warranty Claim Process
+
+### Submitting a Warranty Claim
+
+<Steps>
+  <Step title="Open Order Details">
+    Navigate to order containing defective product
+  </Step>
+  <Step title="Check Warranty Status">
+    Ensure product shows "Warranty Active" badge
+  </Step>
+  <Step title="Click Report Problem">
+    Button appears next to product with active warranty
+  </Step>
+  <Step title="Enter Serial Number">
+    System validates S/N against product's assigned serial numbers
+  </Step>
+  <Step title="Describe Issue">
+    Text field for detailed problem description
+  </Step>
+  <Step title="Upload Evidence">
+    Attach photos/videos of the defect (optional but recommended)
+  </Step>
+  <Step title="Submit Claim">
+    System validates and creates warranty record in Firebase
+  </Step>
+  <Step title="Receive Confirmation">
+    Success message displayed, claim appears in order details
+  </Step>
+</Steps>
+
+### Warranty Claim Form
+
+```
+┌──────────────────────────────────────┐
+│  Report Problem                      │
+│  iPhone 14 Pro (Black, 128GB)       │
+├──────────────────────────────────────┤
+│                                      │
+│  Serial Number: *                    │
+│  [________________]                  │
+│                                      │
+│  Describe the Problem: *             │
+│  [________________________________]  │
+│  [________________________________]  │
+│  [________________________________]  │
+│                                      │
+│  Evidence (Photos/Videos):           │
+│  [Choose Files]  (0 files selected)  │
+│                                      │
+│            [Cancel] [Submit Claim]   │
+└──────────────────────────────────────┘
+```
+
+### Serial Number Validation
+
+**Security Measure to Prevent Fraud**
+
+```javascript
+if (item.sns && Array.isArray(item.sns)) {
+  // Check if provided S/N matches any assigned to this order
+  const snFound = item.sns.some(validSn => 
+    validSn.trim().toUpperCase() === inputSN.toUpperCase()
+  );
+  
+  if (!snFound) {
+    throw new Error("Serial number doesn't match this shipment");
+  }
+}
+
+// Also check for duplicate claims on same S/N
+const duplicateQuery = query(
+  collection(db, "warranties"),
+  where("userId", "==", userId),
+  where("snProvided", "==", inputSN),
+  where("productId", "==", productId)
+);
+
+const existingClaim = await getDocs(duplicateQuery);
+if (!existingClaim.empty) {
+  throw new Error("Warranty claim already exists for this serial number");
+}
+```
+
+<Warning>
+Serial number validation prevents customers from:
+- Claiming warranty on products they didn't purchase
+- Submitting duplicate claims for same unit
+- Using serial numbers from other orders
+</Warning>
+
+### Evidence Upload
+
+Customers can attach multiple files:
+
+```javascript
+const evidenceUrls = [];
+if (imageFiles.length > 0) {
+  for (const file of imageFiles) {
+    // Upload to Firebase Storage
+    const storageRef = ref(storage, `warranties/${orderId}/${Date.now()}_${file.name}`);
+    await uploadBytes(storageRef, file);
+    const url = await getDownloadURL(storageRef);
+    evidenceUrls.push(url);
+  }
+}
+
+// Store URLs in warranty document
+await addDoc(collection(db, "warranties"), {
+  evidenceImages: evidenceUrls,
+  // ... other warranty data
+});
+```
+
+## Tracking Warranty Claims
+
+### Claim Status Display
+
+Once submitted, warranty claim appears in order details:
+
+```
+Product: iPhone 14 Pro
+[Active Warranty: 45 days]
+
+[Case #1: Under Review 🔵]
+[Case #2: Approved ✅]
+```
+
+### Claim Statuses
+
+<Tabs>
+  <Tab title="Under Review">
+    <Card icon="spinner" color="blue">
+    **Status:** `PENDIENTE_REVISION`
+    
+    Claim submitted and awaiting admin review.
+    
+    - Admin receives notification
+    - Technical team evaluates claim
+    - Customer sees "Under Review" badge
+    - Estimated review time: 1-2 business days
+    </Card>
+  </Tab>
+  <Tab title="Approved">
+    <Card icon="check" color="green">
+    **Status:** `APROBADO`
+    
+    Claim validated and approved.
+    
+    - Admin response visible to customer
+    - Next steps explained (repair, replacement, refund)
+    - Technical report available for download
+    - Customer sees "Approved" badge
+    </Card>
+  </Tab>
+  <Tab title="Rejected">
+    <Card icon="xmark" color="red">
+    **Status:** `RECHAZADO`
+    
+    Claim denied.
+    
+    Reasons:
+    - Issue not covered by warranty
+    - Physical damage detected
+    - Misuse or improper handling
+    - Serial number mismatch
+    
+    - Admin explanation provided
+    - Customer sees "Rejected" badge
+    - Can contact support for clarification
+    </Card>
+  </Tab>
+  <Tab title="Closed">
+    <Card icon="archive" color="gray">
+    **Status:** `FINALIZADO`
+    
+    Claim resolved and closed.
+    
+    - Warranty service completed
+    - Product repaired/replaced/refunded
+    - Case archived
+    - Customer sees "Closed" badge
+    </Card>
+  </Tab>
+</Tabs>
+
+### Viewing Claim Details
+
+Click any warranty case badge to see full details:
+
+```
+┌──────────────────────────────────────────┐
+│  Warranty Claim #ABC123                  │
+├──────────────────────────────────────────┤
+│  Status: ✅ APPROVED                     │
+│  Filed: March 5, 2024                    │
+│                                          │
+│  Your Report:                            │
+│  "Screen has dead pixels in upper        │
+│   right corner. Issue started after      │
+│   3 days of normal use."                 │
+│                                          │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
+│                                          │
+│  Admin Response:                         │
+│  "Claim approved. Manufacturing defect   │
+│   confirmed. Please bring device to      │
+│   authorized service center for display  │
+│   replacement. No cost to customer."     │
+│                                          │
+│  Resolved: March 7, 2024                 │
+│                                          │
+│  [📄 Download Technical Report PDF]      │
+│                                          │
+│  [Close]                                 │
+└──────────────────────────────────────────┘
+```
+
+### Real-Time Warranty Updates
+
+```javascript
+function listenForWarranties() {
+  const qW = query(
+    collection(db, "warranties"),
+    where("orderId", "==", orderId),
+    where("userId", "==", userId)
+  );
+  
+  unsubscribeWarranties = onSnapshot(qW, (snapshot) => {
+    // Warranty changes detected
+    const freshWarranties = snapshot.docs.map(d => ({ 
+      id: d.id, 
+      ...d.data() 
+    }));
+    
+    // Compare with current state
+    if (JSON.stringify(activeWarranties) !== JSON.stringify(freshWarranties)) {
+      activeWarranties = freshWarranties;
+      renderItems(currentOrder); // Re-render product list with updated warranty status
+    }
+  });
+}
+```
+
+<Info>
+When admin updates a warranty claim (approves, rejects, adds comment), customer sees the change immediately without refreshing the page.
+</Info>
+
+## Email Notifications
+
+Customers receive email notifications for:
+
+- ✅ **Order Confirmation** (immediately after purchase)
+- 📦 **Order Dispatched** (when tracking number is assigned)
+- 🏠 **Order Delivered** (carrier confirmation)
+- 🛠️ **Warranty Claim Received** (claim submission)
+- ✅ **Warranty Claim Approved** (admin approves claim)
+- ❌ **Warranty Claim Rejected** (admin rejects with reason)
+
+Each email includes direct link to order details page.
+
+## Invoice Display
+
+If customer requested an invoice during checkout:
+
+```
+┌─────────────────────────────────────┐
+│  📄 Invoice Information             │
+├─────────────────────────────────────┤
+│  Business Name: Empresa XYZ S.A.S.  │
+│  Tax ID: 900123456-1                │
+│  Email: facturacion@empresa.com     │
+│                                     │
+│  Invoice will be sent within        │
+│  3 business days after delivery.    │
+└─────────────────────────────────────┘
+```
+
+## Technical Implementation
+
+### Cache Structure for Orders
+
+```json
+{
+  "map": {
+    "order_abc123": {
+      "id": "order_abc123",
+      "userId": "user_xyz",
+      "status": "DESPACHADO",
+      "total": 2500000,
+      "shippingTracking": "1234567890",
+      "shippingCarrier": "Servientrega",
+      "items": [
+        {
+          "id": "prod_001",
+          "name": "iPhone 14 Pro",
+          "price": 4500000,
+          "quantity": 1,
+          "sns": ["C02ABC123DEF"],
+          "warranty": { "time": 12, "unit": "months" }
+        }
+      ],
+      "createdAt": "2024-03-05T10:00:00Z",
+      "updatedAt": "2024-03-06T14:30:00Z",
+      "shippedAt": "2024-03-06T14:30:00Z"
+    }
+  },
+  "lastSync": 1709738400000
+}
+```
+
+### Performance Optimizations
+
+<CardGroup cols={2}>
+  <Card title="Instant Loading" icon="bolt">
+    Order details render from cache before Firebase connection
+  </Card>
+  <Card title="Smart Re-rendering" icon="refresh">
+    Only updates UI when data actually changes (JSON comparison)
+  </Card>
+  <Card title="Selective Listeners" icon="filter">
+    Only subscribes to current order, not entire collection
+  </Card>
+  <Card title="Automatic Cleanup" icon="broom">
+    Unsubscribes from real-time listeners when leaving page
+  </Card>
+</CardGroup>
+
+## Related Features
+
+<CardGroup cols={2}>
+  <Card title="Shopping Cart" icon="cart-shopping" href="/features/cart-checkout">
+    How orders are created from checkout
+  </Card>
+  <Card title="User Accounts" icon="user" href="/features/user-accounts">
+    Accessing order history from profile
+  </Card>
+</CardGroup>

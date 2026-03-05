@@ -1,0 +1,558 @@
+---
+title: Shopping Cart & Checkout
+description: Smart cart management with real-time inventory sync and flexible checkout options
+---
+
+## Overview
+
+PixelTech's shopping cart provides a seamless purchase experience with **real-time inventory monitoring**, **automatic price updates**, and **flexible checkout options** including multiple payment methods and shipping configurations.
+
+## Shopping Cart Experience
+
+### Adding Products to Cart
+
+<Steps>
+  <Step title="Browse Products">
+    Customer finds a product they want to purchase
+  </Step>
+  <Step title="Configure Variants">
+    If product has colors/capacities, customer selects their preference
+  </Step>
+  <Step title="Add to Cart">
+    Product is added with selected configuration (color, capacity, quantity)
+  </Step>
+  <Step title="Real-Time Sync Begins">
+    System starts monitoring that product for price/stock changes
+  </Step>
+</Steps>
+
+### Cart Features
+
+<CardGroup cols={2}>
+  <Card title="Live Stock Monitoring" icon="signal">
+    Firebase connection tracks inventory in real-time
+  </Card>
+  <Card title="Automatic Price Updates" icon="refresh">
+    If product price changes, cart reflects new price
+  </Card>
+  <Card title="Variant Tracking" icon="palette">
+    Each color/capacity combination tracked separately
+  </Card>
+  <Card title="Quantity Management" icon="plus-minus">
+    Increment/decrement with stock limit validation
+  </Card>
+</CardGroup>
+
+## How Real-Time Cart Sync Works
+
+### Intelligent Monitoring
+
+The cart doesn't just store static data - it actively watches Firebase:
+
+```javascript
+// For each unique product in cart
+productIdsInCart.forEach(productId => {
+  // Create real-time listener
+  cartUnsubscribers[productId] = onSnapshot(doc(db, "products", productId), (snap) => {
+    // Update price, stock, and availability instantly
+    updateCartItemsFromCloud(productId, snap.data());
+  });
+});
+```
+
+### What Gets Updated Automatically
+
+<Tabs>
+  <Tab title="Price Changes">
+    **When Admin Updates Price**
+    
+    1. Firebase detects the change
+    2. Cart receives update via onSnapshot
+    3. Item price updates silently in cart
+    4. Cart total recalculates automatically
+    5. Customer sees new price on cart page
+    
+    <Note>
+    Cart items added before a price increase keep their original price until the customer refreshes or leaves the page.
+    </Note>
+  </Tab>
+  <Tab title="Stock Adjustments">
+    **When Inventory Changes**
+    
+    1. Another customer purchases the product
+    2. Stock decreases in Firebase
+    3. Cart receives stock update
+    4. If customer's quantity exceeds new stock:
+       - Quantity is automatically adjusted down
+       - Customer is notified
+    5. If stock reaches zero:
+       - Item is marked "Out of Stock"
+       - Cannot proceed to checkout
+  </Tab>
+  <Tab title="Product Deactivation">
+    **When Product is Removed**
+    
+    1. Admin deactivates or deletes product
+    2. Cart detects status change
+    3. Item is marked as unavailable
+    4. Stock is set to 0
+    5. Customer must remove it before checkout
+  </Tab>
+  <Tab title="Variant Changes">
+    **When Specific Variant Changes**
+    
+    1. Admin updates a color/capacity combination
+    2. Cart checks if customer's specific variant changed
+    3. Updates price/stock for that exact combination
+    4. Other variants in cart remain unchanged
+  </Tab>
+</Tabs>
+
+### Smart Cleanup
+
+When customer removes items from cart:
+- Real-time listener for that product is immediately stopped
+- Reduces Firebase connection usage
+- Optimizes performance and costs
+
+## Cart Page Features
+
+### Cart Display
+
+Each cart item shows:
+
+- **Product image** (from selected color variant if applicable)
+- **Product name** with full specifications
+- **Selected variant** (color and/or capacity badges)
+- **Unit price** (current price from Firebase)
+- **Quantity controls** (with +/- buttons)
+- **Line total** (price × quantity)
+- **Remove button** (instant deletion)
+- **Discount indicators** (if original price was higher)
+
+### Quick Actions
+
+<Card title="Quantity Adjustment" icon="sliders">
+- Click **+** to add one more unit (validates against stock)
+- Click **-** to remove one unit
+- If quantity reaches 0, item is removed from cart
+- System prevents exceeding available stock
+</Card>
+
+<Card title="Item Removal" icon="trash">
+- Instant removal with confirmation
+- Cart total recalculates immediately
+- Cart badge updates in header
+- Empty cart shows "Continue Shopping" message
+</Card>
+
+### Cart Summary
+
+```
+┌─────────────────────────────────┐
+│ Cart Summary                    │
+├─────────────────────────────────┤
+│ Subtotal:    $3,500,000 COP    │
+│ Items:       4 products         │
+│                                 │
+│ [Continue to Checkout Button]   │
+└─────────────────────────────────┘
+```
+
+## Checkout Process
+
+### Checkout Page Flow
+
+<Steps>
+  <Step title="Authentication Check">
+    Customer must be logged in. Guests are redirected to login page with redirect back to checkout.
+  </Step>
+  <Step title="Load Saved Data">
+    System loads customer profile, saved addresses, and order history using real-time sync.
+  </Step>
+  <Step title="Shipping Configuration">
+    Customer enters or selects delivery address.
+  </Step>
+  <Step title="Shipping Cost Calculation">
+    System calculates shipping based on destination and cart value.
+  </Step>
+  <Step title="Payment Method Selection">
+    Customer chooses payment method (varies by location).
+  </Step>
+  <Step title="Optional Invoice Data">
+    If customer needs invoice, they provide tax information.
+  </Step>
+  <Step title="Order Confirmation">
+    Final review and submission.
+  </Step>
+</Steps>
+
+### Shipping Information
+
+#### Address Management
+
+<Tabs>
+  <Tab title="New Customers">
+    **First Checkout**
+    
+    - Enter full shipping details manually
+    - Address is automatically saved as default
+    - Creates foundation for future orders
+  </Tab>
+  <Tab title="Returning Customers">
+    **Saved Addresses**
+    
+    - Dropdown shows all saved addresses
+    - Select address to auto-fill form
+    - Can edit or add new address
+    - Mark address as default (★ indicator)
+  </Tab>
+  <Tab title="Profile Auto-Complete">
+    **Smart Defaults**
+    
+    - Name pre-filled from profile
+    - Phone number pre-filled
+    - Document number pre-filled
+    - Customer only enters address details
+  </Tab>
+</Tabs>
+
+#### Location Selection
+
+**Department & City Autocomplete**
+
+Integration with Colombia API for accurate locations:
+
+1. Customer types department name (e.g., "Cundinamarca")
+2. System shows matching departments
+3. Customer selects department
+4. Cities load for that department
+5. Customer types and selects city (e.g., "Bogotá")
+
+<Warning>
+Payment methods and shipping costs vary by city. Some options only available in specific locations.
+</Warning>
+
+### Shipping Cost Calculation
+
+#### How Shipping is Calculated
+
+<Tabs>
+  <Tab title="Free Shipping">
+    **Order Value Threshold**
+    
+    ```javascript
+    if (cartTotal >= shippingConfig.freeThreshold) {
+      shippingCost = 0;
+      // Display "FREE SHIPPING" badge
+    }
+    ```
+    
+    When cart value exceeds the threshold (configured by admin), shipping is free nationwide.
+  </Tab>
+  <Tab title="City-Based Pricing">
+    **Grouped Rates**
+    
+    ```javascript
+    // Example shipping groups
+    groups: [
+      { cities: ['Bogotá', 'Cali', 'Medellín'], price: 15000 },
+      { cities: ['Barranquilla', 'Cartagena'], price: 20000 },
+      // ... more groups
+    ]
+    ```
+    
+    Cities are grouped into pricing tiers. System matches selected city to appropriate group.
+  </Tab>
+  <Tab title="Default Rate">
+    **Fallback Pricing**
+    
+    If city not found in any group, default shipping rate applies. Ensures all locations are covered.
+  </Tab>
+</Tabs>
+
+#### Real-Time Shipping Config Sync
+
+Shipping configuration loads from Firebase with real-time monitoring:
+
+- **Initial Load**: From sessionStorage cache (instant)
+- **Background Sync**: onSnapshot listens for admin changes
+- **Automatic Update**: If admin changes shipping rates, customer sees new rates immediately
+- **No Page Reload**: Updates happen silently in background
+
+### Dispatch Time Indicator
+
+Dynamic messaging based on cutoff time:
+
+<Tabs>
+  <Tab title="Before Cutoff">
+    **Same-Day Dispatch Available**
+    
+    ```
+    ⚡ Order in 2h 45m and we'll ship TODAY
+    ```
+    
+    Shows countdown to cutoff time (e.g., 2:00 PM). Creates urgency for same-day dispatch.
+  </Tab>
+  <Tab title="After Cutoff">
+    **Next-Day Dispatch**
+    
+    ```
+    📅 Your order will ship TOMORROW
+    ```
+    
+    Clearly communicates next business day dispatch.
+  </Tab>
+</Tabs>
+
+## Payment Methods
+
+### Available Payment Options
+
+<CardGroup cols={2}>
+  <Card title="MercadoPago" icon="credit-card">
+    **Online Payment Gateway**
+    
+    - Credit/debit cards
+    - Nequi
+    - PSE (bank transfer)
+    - Bancolombia
+    - Available nationwide
+  </Card>
+  <Card title="Cash on Delivery (COD)" icon="truck-fast">
+    **Pay When Receiving**
+    
+    - Pay driver with cash/card
+    - Only available in Bogotá
+    - Automatically disabled for other cities
+  </Card>
+  <Card title="ADDI" icon="hand-holding-dollar">
+    **Buy Now, Pay Later**
+    
+    - Instant credit approval
+    - Flexible installments
+    - Requires valid ID and phone
+    - Available nationwide
+  </Card>
+  <Card title="Sistecrédito" icon="building-columns">
+    **Credit Financing**
+    
+    - Consumer credit platform
+    - Multiple payment plans
+    - Requires valid ID and phone
+    - Available nationwide
+  </Card>
+</CardGroup>
+
+### Payment Method Validation
+
+**Location-Based Restrictions**
+
+```javascript
+function validatePaymentMethods() {
+  const city = selectedCity.toLowerCase();
+  const isBogota = city.includes('bogot');
+  
+  if (!isBogota) {
+    // Disable Cash on Delivery
+    codInput.disabled = true;
+    codContainer.classList.add('opacity-50', 'grayscale');
+    showWarning("COD only available in Bogotá");
+  }
+}
+```
+
+Payment options dynamically enable/disable based on delivery city.
+
+### Payment Processing Flow
+
+<Tabs>
+  <Tab title="MercadoPago">
+    **Online Gateway Flow**
+    
+    1. Customer clicks "Pay with MercadoPago"
+    2. System validates all form data
+    3. Auto-saves address if first-time customer
+    4. Calls Firebase Function `createMercadoPagoPreference`
+    5. Function creates payment session in MercadoPago
+    6. Customer redirected to MercadoPago checkout
+    7. Customer completes payment
+    8. MercadoPago webhook notifies backend
+    9. Backend creates order in Firebase
+    10. Customer redirected to success page
+  </Tab>
+  <Tab title="Cash on Delivery">
+    **COD Flow**
+    
+    1. Customer clicks "Confirm COD Order"
+    2. System validates Bogotá address
+    3. Auto-saves address and profile updates
+    4. Calls Firebase Function `createCODOrder`
+    5. Function creates order with PENDIENTE_PAGO status
+    6. Order appears in admin panel for approval
+    7. Customer redirected to success page
+    8. Admin processes order manually
+  </Tab>
+  <Tab title="ADDI">
+    **ADDI Credit Flow**
+    
+    1. Customer enters ID and phone (required)
+    2. Clicks "Pay with ADDI"
+    3. System validates customer data
+    4. Auto-saves profile and address
+    5. Calls Firebase Function `createAddiCheckout`
+    6. Function creates ADDI session
+    7. Customer redirected to ADDI platform
+    8. ADDI performs credit check
+    9. Customer selects payment plan
+    10. ADDI webhook notifies backend
+    11. Backend creates order
+    12. Customer redirected to success page
+  </Tab>
+  <Tab title="Sistecrédito">
+    **Sistecrédito Flow**
+    
+    1. Customer enters ID and phone (required)
+    2. Clicks "Pay with Sistecrédito"
+    3. System validates customer data
+    4. Auto-saves profile and address
+    5. Calls Firebase Function `createSistecreditoCheckout`
+    6. Function creates credit session
+    7. Customer redirected to Sistecrédito portal
+    8. Completes credit application
+    9. Webhook notifies backend on approval
+    10. Backend creates order
+    11. Customer redirected to success page
+  </Tab>
+</Tabs>
+
+### Submit Button States
+
+Button text changes based on selected payment method:
+
+```javascript
+if (selectedPaymentMethod === 'ONLINE') {
+  button.text = "Go to Pay with MercadoPago 🔒";
+  button.color = "blue";
+} else if (selectedPaymentMethod === 'COD') {
+  button.text = "Confirm Cash on Delivery 🚚";
+  button.color = "black";
+} else if (selectedPaymentMethod === 'ADDI') {
+  button.text = "Pay with ADDI →";
+  button.color = "cyan";
+} else if (selectedPaymentMethod === 'SISTECREDITO') {
+  button.text = "Pay with Sistecrédito →";
+  button.color = "green";
+}
+```
+
+## Invoice Options
+
+### Requesting an Invoice
+
+<Steps>
+  <Step title="Enable Invoice">
+    Customer checks "I need an invoice" checkbox
+  </Step>
+  <Step title="Invoice Form Appears">
+    Additional form section slides down
+  </Step>
+  <Step title="Enter Tax Information">
+    - Business name
+    - Tax ID (NIT/RUT)
+    - Billing address
+    - Billing city
+    - Email for invoice delivery
+    - Phone number
+  </Step>
+  <Step title="Data Attached to Order">
+    Invoice data saved in order's `billingData` field
+  </Step>
+</Steps>
+
+<Note>
+Invoice request is optional. Most customers order without requesting formal invoices.
+</Note>
+
+## Smart Profile Auto-Save
+
+### Automatic Profile Completion
+
+The checkout process intelligently updates customer profiles:
+
+**First-Time Buyers**
+
+```javascript
+if (userAddresses.length === 0) {
+  // Automatically save address as default
+  shouldSaveAddress = true;
+  isFirstAddress = true;
+  
+  await updateDoc(doc(db, "users", userId), {
+    addresses: arrayUnion(newAddress),
+    name: enteredName,
+    phone: enteredPhone,
+    document: enteredDocument
+  });
+}
+```
+
+**Profile Gap Filling**
+
+If customer profile is missing data (name, phone, document), checkout automatically fills it:
+
+```javascript
+let updates = {};
+if (!userProfile.name) updates.name = checkoutFormName;
+if (!userProfile.phone) updates.phone = checkoutFormPhone;
+if (!userProfile.document) updates.document = checkoutFormDocument;
+
+if (Object.keys(updates).length > 0) {
+  await updateDoc(userRef, updates);
+}
+```
+
+<Info>
+This ensures customer profiles are always complete without requiring separate profile setup steps.
+</Info>
+
+## Order Summary Display
+
+### Checkout Summary Panel
+
+```
+┌──────────────────────────────────────┐
+│  Order Summary (4 Items)             │
+├──────────────────────────────────────┤
+│                                      │
+│  [img] Product 1                     │
+│         Color: Black | 128GB         │
+│         Qty: 2        $1,200,000     │
+│  -10% discount badge                 │
+│                                      │
+│  [img] Product 2                     │
+│         Qty: 1        $800,000       │
+│                                      │
+├──────────────────────────────────────┤
+│  Subtotal:           $2,000,000      │
+│  Shipping:           $15,000         │
+│  ─────────────────────────────       │
+│  TOTAL:              $2,015,000      │
+└──────────────────────────────────────┘
+```
+
+Summary updates in real-time as cart changes (via `cartUpdated` event listener).
+
+## Related Features
+
+<CardGroup cols={2}>
+  <Card title="Product Catalog" icon="grid" href="/features/catalog">
+    How customers discover and browse products
+  </Card>
+  <Card title="User Accounts" icon="user" href="/features/user-accounts">
+    Profile and saved address management
+  </Card>
+  <Card title="Order Tracking" icon="truck-fast" href="/features/order-tracking">
+    What happens after checkout
+  </Card>
+</CardGroup>

@@ -1,122 +1,121 @@
 {
   "$schema": "https://mintlify.com/docs.json",
+  "name": "PixelTech Colombia",
   "theme": "mint",
-  "name": "Mint Starter Kit",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#00AEC7",
+    "light": "#00D4F0",
+    "dark": "#008FA3"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/J0nnyGM/pixeltechcol"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/J0nnyGM/pixeltechcol"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Platform",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Getting Started",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "architecture"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Customer Features",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "features/catalog",
+              "features/cart-checkout",
+              "features/user-accounts",
+              "features/order-tracking"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Admin Dashboard",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "admin/overview",
+              "admin/inventory",
+              "admin/orders",
+              "admin/customers",
+              "admin/whatsapp",
+              "admin/accounting"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Integrations",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "integrations/payment-gateways",
+              "integrations/mercadopago",
+              "integrations/addi",
+              "integrations/sistecredito",
+              "integrations/whatsapp-api"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "Development",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Setup",
             "pages": [
-              "api-reference/introduction"
+              "development/environment",
+              "development/firebase-setup",
+              "development/deployment"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Backend",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "backend/cloud-functions",
+              "backend/firestore-schema",
+              "backend/security-rules",
+              "backend/webhooks"
+            ]
+          },
+          {
+            "group": "Frontend",
+            "pages": [
+              "frontend/smart-sync",
+              "frontend/components",
+              "frontend/styling"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Cloud Functions",
+            "pages": [
+              "api/payments",
+              "api/orders",
+              "api/emails",
+              "api/scheduler"
+            ]
+          },
+          {
+            "group": "Firestore Collections",
+            "pages": [
+              "api/collections/products",
+              "api/collections/orders",
+              "api/collections/users",
+              "api/collections/chats"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

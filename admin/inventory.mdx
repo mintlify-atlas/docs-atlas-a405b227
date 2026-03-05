@@ -1,0 +1,342 @@
+---
+title: 'Inventory Management'
+description: 'Complete guide to managing products, stock, and suppliers in PixelTech'
+icon: 'boxes-stacked'
+---
+
+## Product Catalog Management
+
+The inventory system uses a **Smart Real-Time Cache** architecture that synchronizes products to `localStorage`, enabling instant searches and minimal Firebase reads.
+
+### Smart Sync Architecture
+
+```javascript
+const SmartAdminInventorySync = {
+    STORAGE_KEY: 'pixeltech_admin_master_inventory',
+    runtimeMap: {},
+    lastSyncTime: 0,
+
+    async init() {
+        // 1. Instant load from cache
+        const cachedRaw = localStorage.getItem(this.STORAGE_KEY);
+        if (cachedRaw) {
+            const parsed = JSON.parse(cachedRaw);
+            this.runtimeMap = parsed.map;
+            this.updateGlobalArray();
+            renderViewFromMemory(); // Instant UI
+        }
+
+        // 2. Listen for real-time updates (deltas only)
+        this.listenForUpdates();
+    }
+};
+```
+
+<Info>
+  **Performance**: First load is instantaneous from cache. Only changed products trigger Firebase reads.
+</Info>
+
+## Stock Tracking and Adjustments
+
+### Product Variations
+
+Products can have combinations of colors and capacities. Stock is tracked per combination:
+
+```javascript
+// Product structure with combinations
+{
+  id: "prod123",
+  name: "iPhone 15 Pro",
+  price: 4500000,
+  stock: 45, // Total stock
+  combinations: [
+    {
+      color: "Negro",
+      capacity: "128GB",
+      price: 4500000,
+      stock: 15,
+      sku: "IP15P-BLK-128"
+    },
+    {
+      color: "Negro",
+      capacity: "256GB",
+      price: 5200000,
+      stock: 10,
+      sku: "IP15P-BLK-256"
+    }
+  ]
+}
+```
+
+### Stock Adjustment Function
+
+From `inventory-core.js`:
+
+```javascript
+export async function adjustStock(productId, delta, color = null, capacity = null) {
+    const productRef = doc(db, "products", productId);
+    
+    await runTransaction(db, async (transaction) => {
+        const productDoc = await transaction.get(productRef);
+        if (!productDoc.exists()) throw "Product not found";
+        
+        const data = productDoc.data();
+        let newStock = (data.stock || 0) + delta;
+        
+        // If product has combinations, adjust specific variant
+        if (data.combinations && (color || capacity)) {
+            const combos = data.combinations.map(c => {
+                if (c.color === color && c.capacity === capacity) {
+                    return { ...c, stock: (c.stock || 0) + delta };
+                }
+                return c;
+            });
+            
+            // Recalculate total stock
+            newStock = combos.reduce((sum, c) => sum + (c.stock || 0), 0);
+            
+            transaction.update(productRef, {
+                combinations: combos,
+                stock: newStock,
+                updatedAt: new Date()
+            });
+        } else {
+            transaction.update(productRef, {
+                stock: newStock,
+                updatedAt: new Date()
+            });
+        }
+    });
+}
+```
+
+<Warning>
+  **Atomic Operations**: Stock adjustments use Firestore transactions to prevent race conditions during concurrent sales.
+</Warning>
+
+## Product Creation and Editing
+
+### Required Fields
+
+- **Name**: Product title (searchable)
+- **SKU**: Unique identifier
+- **Price**: Base selling price
+- **Category**: Product classification
+- **Status**: `active` or `draft`
+
+### Optional Fields
+
+- **Brand**: Manufacturer name
+- **Description**: Rich HTML content
+- **Images**: Main image + gallery
+- **Warranty**: Time period and unit (days/months/years)
+- **Variations**: Colors and capacities
+
+### Low Stock Alerts
+
+Products with ≤5 units are automatically flagged:
+
+```javascript
+if (currentFilterType === 'lowstock') {
+    filtered = adminProductsCache.filter(p => (p.stock || 0) <= 5);
+    filtered.sort((a,b) => (a.stock || 0) - (b.stock || 0));
+}
+```
+
+## Discount and Promotions
+
+Apply temporary price reductions with automatic expiration:
+
+### Single Product Discount
+
+```javascript
+await updateDoc(doc(db, "products", productId), {
+    originalPrice: 500000,      // Store original
+    price: 399000,              // New discounted price
+    promoEndsAt: endDate,       // Auto-restore on this date
+    updatedAt: new Date()
+});
+```
+
+### Multi-Variant Discount
+
+For products with combinations:
+
+```javascript
+const updatedCombinations = product.combinations.map(c => {
+    if (!c.originalPrice) c.originalPrice = c.price;
+    
+    if (newPriceRaw > 0 && newPriceRaw < c.originalPrice) {
+        c.price = newPriceRaw;
+    } else {
+        c.price = c.originalPrice; // Restore original
+    }
+    return c;
+});
+```
+
+<Tip>
+  **Visual Indicators**: Discounted products automatically show percentage badges and strike-through pricing in the catalog.
+</Tip>
+
+## Suppliers and Purchases
+
+### Supplier Management
+
+Suppliers are stored in the `suppliers` collection:
+
+```javascript
+{
+  name: "Importadora XYZ SAS",
+  contact: "Carlos Mendoza",
+  phone: "3001234567",
+  email: "ventas@xyz.com",
+  category: "Electrónica"
+}
+```
+
+### Purchase Orders
+
+Track inventory purchases and payables:
+
+```javascript
+// Create purchase
+await addDoc(collection(db, "purchases"), {
+    supplierId: "supplier123",
+    items: [
+        { productId: "prod456", quantity: 50, unitCost: 200000 }
+    ],
+    total: 10000000,
+    status: "PENDING",
+    createdAt: new Date()
+});
+
+// Create payable (debt to supplier)
+await addDoc(collection(db, "payables"), {
+    provider: "Importadora XYZ SAS",
+    description: "Compra electrónica junio",
+    total: 10000000,
+    amountPaid: 0,
+    balance: 10000000,
+    status: "PENDING",
+    dueDate: new Date("2024-07-15")
+});
+```
+
+## Warranty Inventory
+
+Manage products under warranty separately:
+
+```javascript
+// Warranty claim structure
+{
+  orderId: "order123",
+  userId: "user456",
+  productId: "prod789",
+  issue: "Pantalla no enciende",
+  status: "PENDING",        // PENDING | APPROVED | REJECTED | REPLACED
+  createdAt: Timestamp,
+  resolvedAt: null,
+  replacementProductId: null
+}
+```
+
+### Warranty Rules
+
+From firestore.rules:
+
+```javascript
+match /warranties/{warrantyId} {
+  allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+  allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+  allow update, delete: if isAdmin();
+}
+```
+
+## Search and Filters
+
+### Real-Time Search (Zero Reads)
+
+Search operates entirely in-memory:
+
+```javascript
+function renderViewFromMemory() {
+    const term = normalizeText(searchInput.value.trim());
+    
+    if (term.length > 0) {
+        filtered = adminProductsCache.filter(p => 
+            p.searchStr && p.searchStr.includes(term)
+        );
+    }
+    
+    // Pagination
+    const pageProducts = filtered.slice(startIdx, endIdx);
+    renderTable(pageProducts);
+}
+```
+
+### Available Filters
+
+<Tabs>
+  <Tab title="All Products">
+    Show entire catalog (active + draft)
+  </Tab>
+  <Tab title="Active">
+    Only published products visible to customers
+  </Tab>
+  <Tab title="Draft">
+    Unpublished or hidden products
+  </Tab>
+  <Tab title="Low Stock">
+    Products with ≤5 units remaining
+  </Tab>
+</Tabs>
+
+## Product Status Management
+
+Toggle visibility without deleting:
+
+```javascript
+window.toggleProductStatus = async (id, currentStatus) => {
+    const newStatus = currentStatus === 'active' ? 'draft' : 'active';
+    
+    await updateDoc(doc(db, "products", id), {
+        status: newStatus,
+        updatedAt: new Date()
+    });
+    
+    // Real-time listener automatically updates UI
+};
+```
+
+<Note>
+  **Security**: Product price changes require admin role. Stock adjustments can be performed by authenticated system processes.
+</Note>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Stock Management">
+    - Always use `adjustStock()` function for inventory changes
+    - Never manually modify stock values to prevent race conditions
+    - Review low-stock alerts daily
+  </Accordion>
+  
+  <Accordion title="Product Variations">
+    - Use combinations for color/capacity variants
+    - Each combination tracks independent stock
+    - Set unique SKUs for each variant
+  </Accordion>
+  
+  <Accordion title="Pricing Strategy">
+    - Use `originalPrice` field for promotions
+    - Set `promoEndsAt` for automatic restoration
+    - Discount percentage is calculated automatically
+  </Accordion>
+  
+  <Accordion title="Supplier Relations">
+    - Link purchases to suppliers for reporting
+    - Track payment terms in payables
+    - Monitor supplier performance
+  </Accordion>
+</AccordionGroup>

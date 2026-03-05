@@ -1,0 +1,235 @@
+---
+title: 'Local Development Setup'
+description: 'Set up your local development environment for PixelTech Colombia'
+---
+
+## Prerequisites
+
+Before setting up the project locally, ensure you have the following installed:
+
+- **Node.js v24** (required by Cloud Functions)
+- **npm** (comes with Node.js)
+- **Firebase CLI** (`npm install -g firebase-tools`)
+- **Git** for version control
+
+## Getting Started
+
+<Steps>
+  <Step title="Clone the Repository">
+    Clone the PixelTech Colombia repository to your local machine:
+
+    ```bash
+    git clone <repository-url>
+    cd pixeltechcol
+    ```
+  </Step>
+
+  <Step title="Install Root Dependencies">
+    Install the dependencies for the main project (Tailwind CSS and utilities):
+
+    <CodeGroup>
+    ```bash npm
+    npm install
+    ```
+
+    ```bash yarn
+    yarn install
+    ```
+
+    ```bash pnpm
+    pnpm install
+    ```
+    </CodeGroup>
+
+    This will install:
+    - `tailwindcss@^4.1.18` - CSS framework
+    - `@tailwindcss/cli@^4.1.18` - Tailwind CLI
+    - `dotenv@^17.2.3` - Environment variable management
+  </Step>
+
+  <Step title="Install Cloud Functions Dependencies">
+    Navigate to the functions directory and install dependencies:
+
+    ```bash
+    cd functions
+    npm install
+    cd ..
+    ```
+
+    This installs all Cloud Functions dependencies including:
+    - `firebase-admin@^13.7.0` - Firebase Admin SDK
+    - `firebase-functions@^7.0.6` - Cloud Functions SDK
+    - `mercadopago@^2.12.0` - MercadoPago integration
+    - `nodemailer@^7.0.13` - Email notifications
+    - `axios@^1.13.4` - HTTP client
+    - And other payment gateway integrations
+  </Step>
+
+  <Step title="Configure Environment Variables">
+    Create a `.env` file in the `functions/` directory with the following variables:
+
+    ```bash functions/.env
+    # MercadoPago
+    MP_ACCESS_TOKEN=your_mercadopago_token
+
+    # ADDI Payment Gateway
+    ADDI_CLIENT_ID=your_addi_client_id
+    ADDI_CLIENT_SECRET=your_addi_client_secret
+
+    # Sistecrédito Payment Gateway
+    SC_API_KEY=your_sistecredito_api_key
+    SC_APP_KEY=your_sistecredito_app_key
+    SC_APP_TOKEN=your_sistecredito_app_token
+
+    # Email Configuration (SMTP)
+    SMTP_HOST=smtp.gmail.com
+    SMTP_PORT=465
+    SMTP_EMAIL=your_email@pixeltech.com
+    SMTP_PASSWORD=your_email_password
+
+    # WhatsApp Business API
+    WHATSAPP_VERIFY_TOKEN=your_verify_token
+    WHATSAPP_API_TOKEN=your_api_token
+    WHATSAPP_PHONE_ID=your_phone_id
+    ```
+
+    <Warning>
+      Never commit the `.env` file to version control. It should be listed in `.gitignore`.
+    </Warning>
+  </Step>
+
+  <Step title="Start the Development Server">
+    Run the Tailwind CSS build process in watch mode:
+
+    ```bash
+    npm run dev
+    ```
+
+    This command watches for changes in `./src/input.css` and compiles to `./public/css/styles.css`.
+  </Step>
+
+  <Step title="Start Firebase Emulators">
+    In a separate terminal, start the Firebase emulators for local testing:
+
+    ```bash
+    firebase emulators:start
+    ```
+
+    This will start the following emulators:
+    - **Authentication**: `localhost:9099`
+    - **Firestore**: `localhost:8080`
+    - **Cloud Functions**: `localhost:5001`
+    - **Hosting**: `localhost:5000`
+    - **Emulator UI**: Available with detailed logs and data inspection
+
+    <Info>
+      The emulator ports are configured in `firebase.json`. You can access the Emulator UI to view and manage your local Firebase data.
+    </Info>
+  </Step>
+
+  <Step title="Access the Application">
+    Open your browser and navigate to:
+
+    ```
+    http://localhost:5000
+    ```
+
+    Your application should now be running locally with all Firebase services emulated.
+  </Step>
+</Steps>
+
+## Development Workflow
+
+### Tailwind CSS Compilation
+
+The project uses Tailwind CSS v4 with the following configuration:
+
+```js tailwind.config.js
+module.exports = {
+  content: ["./public/**/*.{html,js}"],
+  theme: {
+    extend: {
+      colors: {
+        'brand-primary': '#2563EB',
+        'brand-dark': '#1E293B',
+      }
+    },
+  },
+  plugins: [],
+}
+```
+
+Styles are compiled from `src/input.css` to `public/css/styles.css` automatically when running `npm run dev`.
+
+### Testing Cloud Functions Locally
+
+To test individual Cloud Functions:
+
+```bash
+cd functions
+npm run serve
+```
+
+Or use the Firebase Functions shell:
+
+```bash
+cd functions
+npm run shell
+```
+
+### Viewing Function Logs
+
+View Cloud Functions logs during development:
+
+```bash
+cd functions
+npm run logs
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Port already in use">
+    If you see a port conflict error, you can:
+    1. Stop the process using that port
+    2. Change the port in `firebase.json` under the `emulators` section
+  </Accordion>
+
+  <Accordion title="Node version mismatch">
+    Cloud Functions require Node.js v24. Check your version:
+    ```bash
+    node --version
+    ```
+    Use `nvm` (Node Version Manager) to switch versions if needed:
+    ```bash
+    nvm install 24
+    nvm use 24
+    ```
+  </Accordion>
+
+  <Accordion title="Tailwind not compiling">
+    Ensure you're running `npm run dev` in the root directory and that the input file exists at `src/input.css`.
+  </Accordion>
+
+  <Accordion title="Firebase emulators not starting">
+    Make sure you're logged in to Firebase CLI:
+    ```bash
+    firebase login
+    ```
+    And that you've selected the correct project:
+    ```bash
+    firebase use <project-id>
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Firebase Setup" icon="fire" href="/development/firebase-setup">
+    Configure your Firebase project and services
+  </Card>
+  <Card title="Deployment" icon="rocket" href="/development/deployment">
+    Learn how to deploy to production
+  </Card>
+</CardGroup>

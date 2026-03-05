@@ -1,80 +1,478 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: "Quickstart Guide"
+description: "Set up your PixelTech Colombia store and start selling in minutes"
 ---
 
-## Get started in three steps
+## Get Your Store Running
 
-Get your documentation site running locally and make your first customization.
+This guide will walk you through setting up a complete PixelTech Colombia e-commerce store on Firebase. You'll configure Firebase services, deploy the application, and add your first product.
 
-### Step 1: Set up your local environment
+<Steps>
+  <Step title="Create Firebase Project">
+    Start by creating a new Firebase project in the [Firebase Console](https://console.firebase.google.com).
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+    1. Click **Add Project**
+    2. Enter your project name (e.g., "pixeltech-store")
+    3. Choose whether to enable Google Analytics (recommended)
+    4. Click **Create Project**
+
+    <Note>
+      Firebase offers a generous free tier that's perfect for getting started. You can scale up as your store grows.
+    </Note>
+  </Step>
+
+  <Step title="Enable Firebase Services">
+    Enable the required Firebase services for your store:
+
+    ### Authentication
+    1. Go to **Authentication** → **Get Started**
+    2. Enable **Email/Password** sign-in method
+    3. Enable **Google** sign-in method (optional but recommended)
+
+    ### Firestore Database
+    1. Go to **Firestore Database** → **Create Database**
+    2. Start in **Production Mode**
+    3. Choose your region (select closest to Colombia: `us-east1` or `southamerica-east1`)
+
+    ### Cloud Storage
+    1. Go to **Storage** → **Get Started**
+    2. Start in **Production Mode**
+    3. Use the same region as Firestore
+
+    ### Cloud Functions
+    1. Go to **Functions** → **Get Started**
+    2. Upgrade to Blaze (Pay as you go) plan
+    3. Enable Cloud Functions API
+
+    <Warning>
+      Cloud Functions requires a billing account, but Firebase's free tier includes:
+      - 2M function invocations/month
+      - 400,000 GB-seconds compute time
+      - 200,000 CPU-seconds compute time
+    </Warning>
+
+    ### Hosting
+    1. Go to **Hosting** → **Get Started**
+    2. Follow the setup wizard
+  </Step>
+
+  <Step title="Clone and Configure">
+    Clone the PixelTech repository and configure your Firebase project.
+
+    ```bash Terminal
+    # Clone the repository
+    git clone <your-repo-url>
+    cd pixeltech-colombia
+
+    # Install Firebase CLI
+    npm install -g firebase-tools
+
+    # Login to Firebase
+    firebase login
+
+    # Initialize Firebase in your project
+    firebase init
+    ```
+
+    When prompted, select:
+    - **Firestore**: Yes
+    - **Functions**: Yes (Node.js 24)
+    - **Hosting**: Yes
+    - **Storage**: Yes
+
+    ### Update Firebase Configuration
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    Get your Firebase config from the Firebase Console:
+    1. Go to **Project Settings** → **General**
+    2. Scroll to "Your apps" → **Web app**
+    3. Copy the configuration object
 
-### Step 2: Deploy your changes
+    Update `public/js/firebase-init.js` with your credentials:
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    ```javascript public/js/firebase-init.js
+    const firebaseConfig = {
+      apiKey: "your-api-key",
+      authDomain: "your-project.firebaseapp.com",
+      projectId: "your-project-id",
+      storageBucket: "your-project.firebasestorage.app",
+      messagingSenderId: "your-sender-id",
+      appId: "your-app-id",
+      measurementId: "your-measurement-id"
+    };
+    ```
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    <Tip>
+      Keep your Firebase configuration secure. Never commit sensitive credentials to public repositories.
+    </Tip>
+  </Step>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+  <Step title="Deploy Firestore Rules">
+    Set up security rules to protect your data.
 
-### Step 3: Go live
+    The platform includes comprehensive security rules in `firestore.rules`:
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    ```javascript firestore.rules
+    rules_version = '2';
+    service cloud.firestore {
+      match /databases/{database}/documents {
+        
+        // Helper functions
+        function isAdmin() {
+          return request.auth != null && 
+            exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+        }
 
-## Next steps
+        function isOwner(userId) {
+          return request.auth != null && request.auth.uid == userId;
+        }
 
-Now that you have your docs running, explore these key features:
+        // Products: Public read, admin write
+        match /products/{productId} {
+          allow read: if true;
+          allow create, delete: if isAdmin();
+          allow update: if isAdmin();
+          
+          // Allow stock updates from authenticated users
+          allow update: if request.auth != null && 
+            request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['stock', 'combinations', 'updatedAt']);
+        }
+
+        // Orders: Create with validation
+        match /orders/{orderId} {
+          allow create: if request.resource.data.total > 0 && 
+                          request.resource.data.items is list;
+          allow read: if isAdmin() || 
+                        (request.auth != null && resource.data.userId == request.auth.uid);
+          allow update, delete: if isAdmin();
+        }
+
+        // Users and their addresses
+        match /users/{userId} {
+          allow read, write: if isOwner(userId) || isAdmin();
+          
+          match /addresses/{addressId} {
+            allow read, write: if isOwner(userId) || isAdmin();
+          }
+        }
+      }
+    }
+    ```
+
+    Deploy the rules:
+
+    ```bash Terminal
+    firebase deploy --only firestore:rules
+    firebase deploy --only storage:rules
+    ```
+
+    <Info>
+      The security rules ensure that:
+      - Anyone can browse products
+      - Only authenticated users can create orders
+      - Users can only access their own orders and data
+      - Admins have full access to all resources
+    </Info>
+  </Step>
+
+  <Step title="Configure Environment Variables">
+    Set up environment variables for Cloud Functions.
+
+    Create `functions/.env` file:
+
+    ```bash functions/.env
+    # MercadoPago Integration
+    MP_ACCESS_TOKEN=your_mercadopago_access_token
+
+    # Email Notifications (SMTP)
+    SMTP_HOST=smtp.gmail.com
+    SMTP_PORT=465
+    SMTP_EMAIL=your_store@gmail.com
+    SMTP_PASSWORD=your_app_password
+
+    # ADDI Integration (Optional)
+    ADDI_CLIENT_ID=your_addi_client_id
+    ADDI_CLIENT_SECRET=your_addi_client_secret
+    ADDI_API_URL=https://api.addi.com
+
+    # Sistecrédito Integration (Optional)
+    SISTECREDITO_API_KEY=your_sistecredito_key
+
+    # WhatsApp Business API (Optional)
+    WHATSAPP_API_TOKEN=your_whatsapp_token
+    WHATSAPP_PHONE_ID=your_phone_number_id
+    ```
+
+    <Warning>
+      **Never commit `.env` files to version control!** Add `functions/.env` to your `.gitignore`.
+    </Warning>
+
+    ### Getting Payment Gateway Credentials
+
+    **MercadoPago** (Required for online payments):
+    1. Create account at [MercadoPago Developers](https://www.mercadopago.com.co/developers)
+    2. Go to "Your integrations" → "Credentials"
+    3. Copy your **Production Access Token**
+
+    **ADDI** (Optional - Buy Now Pay Later):
+    1. Contact [ADDI Colombia](https://addi.com/co/) for merchant onboarding
+    2. Receive API credentials after approval
+  </Step>
+
+  <Step title="Deploy Cloud Functions">
+    Deploy the serverless backend functions.
+
+    ```bash Terminal
+    # Install function dependencies
+    cd functions
+    npm install
+    cd ..
+
+    # Deploy all functions
+    firebase deploy --only functions
+    ```
+
+    This deploys:
+    - **Payment processing**: MercadoPago, ADDI, Sistecrédito
+    - **Order management**: Email notifications, webhooks
+    - **Automated tasks**: Cleanup, scheduled transfers
+    - **Integrations**: WhatsApp, Google Merchant Feed, sitemap
+
+    <Tip>
+      The first deployment takes 5-10 minutes. Subsequent deployments are faster.
+    </Tip>
+
+    Verify deployment:
+
+    ```bash Terminal
+    firebase functions:list
+    ```
+
+    You should see:
+    ```
+    ✔ createMercadoPagoPreference
+    ✔ mercadoPagoWebhook
+    ✔ createCODOrder
+    ✔ sendOrderConfirmation
+    ✔ cleanupOldOrders
+    ✔ touchProductTimestamp
+    ... and more
+    ```
+  </Step>
+
+  <Step title="Deploy the Frontend">
+    Deploy your store's frontend to Firebase Hosting.
+
+    ```bash Terminal
+    # Build your Tailwind CSS (if using)
+    npm run dev
+
+    # Deploy to Firebase Hosting
+    firebase deploy --only hosting
+    ```
+
+    Your store will be live at:
+    ```
+    https://your-project-id.web.app
+    ```
+
+    <Note>
+      You can configure a custom domain in **Hosting → Add custom domain** in the Firebase Console.
+    </Note>
+  </Step>
+
+  <Step title="Create Your First Admin User">
+    Create an admin account to manage your store.
+
+    1. Go to your deployed site
+    2. Click **Register** and create an account
+    3. Go to Firebase Console → **Firestore Database**
+    4. Find the `users` collection
+    5. Find your user document and click to edit
+    6. Add a field: `role` (string) = `admin`
+    7. Save the document
+
+    <Info>
+      The admin role grants access to:
+      - Product management
+      - Order processing
+      - Customer management
+      - Inventory tracking
+      - Financial reports
+    </Info>
+
+    Now log out and log back in to access the admin panel at `/admin/products.html`.
+  </Step>
+
+  <Step title="Add Your First Product">
+    Add a product to your catalog through the admin panel.
+
+    1. Navigate to **Admin Panel** → **Products**
+    2. Click **Create Product**
+    3. Fill in the product details:
+
+    ```javascript Product Data Example
+    {
+      "name": "iPhone 15 Pro Max",
+      "brand": "Apple",
+      "category": "smartphones",
+      "price": 5499000,
+      "originalPrice": 5999000,
+      "stock": 10,
+      "status": "active",
+      "description": "Latest iPhone with titanium design and A17 Pro chip",
+      "colors": ["Natural Titanium", "Blue Titanium", "Black Titanium"],
+      "capacities": ["256GB", "512GB", "1TB"],
+      "combinations": [
+        {
+          "color": "Natural Titanium",
+          "capacity": "256GB",
+          "stock": 5,
+          "sku": "IPH15PM-NT-256"
+        },
+        {
+          "color": "Blue Titanium",
+          "capacity": "512GB",
+          "stock": 3,
+          "sku": "IPH15PM-BT-512"
+        }
+      ],
+      "mainImage": "<upload_image_url>",
+      "images": ["<image_1>", "<image_2>"]
+    }
+    ```
+
+    4. Upload product images
+    5. Click **Save Product**
+
+    <Tip>
+      Use high-quality images (1200x1200px recommended) and include multiple angles of the product.
+    </Tip>
+  </Step>
+
+  <Step title="Configure Store Settings">
+    Set up your store configuration in Firestore.
+
+    Create a document in the `config` collection with ID `system`:
+
+    ```javascript Firestore: config/system
+    {
+      "storeName": "PixelTech Colombia",
+      "storeEmail": "ventas@pixeltech.co",
+      "storePhone": "+57 300 1234567",
+      "currency": "COP",
+      "taxRate": 0.19,
+      "cacheVersion": 1,
+      "freeShippingThreshold": 150000,
+      "defaultShippingCost": 15000,
+      "enableWhatsApp": true,
+      "whatsappNumber": "+573001234567"
+    }
+    ```
+
+    Create a document in `config` collection with ID `shipping`:
+
+    ```javascript Firestore: config/shipping
+    {
+      "freeThreshold": 150000,
+      "defaultPrice": 15000,
+      "groups": [
+        {
+          "name": "Bogotá Metro",
+          "price": 8000,
+          "daysMin": 1,
+          "daysMax": 2,
+          "cities": ["Bogotá", "Soacha", "Chía", "Cajicá"]
+        },
+        {
+          "name": "Principales Ciudades",
+          "price": 15000,
+          "daysMin": 2,
+          "daysMax": 4,
+          "cities": ["Medellín", "Cali", "Barranquilla", "Cartagena"]
+        }
+      ]
+    }
+    ```
+  </Step>
+</Steps>
+
+## Test Your Store
+
+Now that everything is set up, test your store:
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Browse Products" icon="magnifying-glass">
+    Visit your store homepage and verify products are displayed correctly
+  </Card>
+  <Card title="Add to Cart" icon="cart-shopping">
+    Test the shopping cart and checkout flow
+  </Card>
+  <Card title="Place Test Order" icon="credit-card">
+    Use MercadoPago test credentials to process a test order
+  </Card>
+  <Card title="Admin Panel" icon="gauge-high">
+    Log in as admin and explore the management features
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture Overview" icon="diagram-project" href="/architecture">
+    Learn how PixelTech works under the hood
+  </Card>
+  <Card title="Configure Payments" icon="credit-card" href="/integrations/payment-gateways">
+    Set up additional payment methods
+  </Card>
+  <Card title="Frontend Styling" icon="palette" href="/frontend/styling">
+    Customize your store's appearance with Tailwind CSS
+  </Card>
+  <Card title="WhatsApp Integration" icon="message" href="/integrations/whatsapp-api">
+    Enable customer service via WhatsApp
+  </Card>
+</CardGroup>
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="Products not loading" icon="triangle-exclamation">
+    **Check Firestore rules**: Ensure products have `allow read: if true`
+    
+    **Verify product status**: Products must have `status: "active"` to appear
+    
+    **Check browser console**: Look for Firebase authentication or permission errors
+  </Accordion>
+
+  <Accordion title="Payment functions failing" icon="credit-card">
+    **Verify environment variables**: Check `functions/.env` has correct credentials
+    
+    **Check function logs**:
+    ```bash
+    firebase functions:log
+    ```
+    
+    **Test credentials**: Use MercadoPago test mode first before production
+  </Accordion>
+
+  <Accordion title="Images not uploading" icon="image">
+    **Check Storage rules**: Verify `storage.rules` allows authenticated writes
+    
+    **Check file size**: Firebase Storage has default limits (5MB for free tier)
+    
+    **Verify CORS**: Ensure Firebase Storage CORS is configured correctly
+  </Accordion>
+
+  <Accordion title="Admin panel not accessible" icon="user-shield">
+    **Verify user role**: Check Firestore `users/{uid}` has `role: "admin"`
+    
+    **Clear cache**: Log out and log back in to refresh authentication state
+    
+    **Check security rules**: Ensure admin functions check role properly
+  </Accordion>
+</AccordionGroup>
+
+<Info>
+  **Need help?** Check the [Architecture documentation](/architecture) for detailed technical information or review the [Firebase documentation](https://firebase.google.com/docs) for platform-specific issues.
+</Info>

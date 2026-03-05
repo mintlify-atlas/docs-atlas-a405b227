@@ -1,0 +1,622 @@
+---
+title: 'WhatsApp Customer Service'
+description: 'Manage customer conversations, send products, and create orders via WhatsApp Business API'
+icon: 'whatsapp'
+---
+
+## WhatsApp Business API Integration
+
+PixelTech uses Firebase Cloud Functions to integrate with WhatsApp Business API for customer service.
+
+### Chat Architecture
+
+```javascript
+// Chat document
+collection(db, "chats") {
+  [phoneNumber]: {
+    clientName: "María Rodríguez",
+    lastMessage: "Gracias por la información!",
+    lastMessageAt: Timestamp,
+    lastCustomerInteraction: Timestamp,
+    status: "open",        // or "resolved"
+    unread: true,
+    createdAt: Timestamp
+  }
+}
+
+// Messages subcollection
+collection(db, "chats/573001234567/messages") {
+  [messageId]: {
+    type: "incoming" | "outgoing",
+    messageType: "text" | "image" | "audio",
+    content: "Message text",
+    mediaUrl: "https://...",  // for images/audio
+    timestamp: Timestamp
+  }
+}
+```
+
+### Security Rules
+
+```javascript
+match /chats/{chatId} {
+  allow read, write: if isAdmin();
+  
+  match /messages/{messageId} {
+    allow read, write: if isAdmin();
+  }
+}
+```
+
+<Warning>
+  Only admins can access WhatsApp conversations to protect customer privacy.
+</Warning>
+
+## Chat Management
+
+### Real-Time Chat List
+
+Optimized with `docChanges()` for surgical updates:
+
+```javascript
+function initChatList() {
+    const ref = collection(db, "chats");
+    const q = query(
+        ref, 
+        where("status", "==", currentTab), 
+        orderBy("lastMessageAt", "desc"), 
+        limit(50)
+    );
+    
+    unsubscribeChats = onSnapshot(q, (snapshot) => {
+        snapshot.docChanges().forEach(change => {
+            const data = change.doc.data();
+            const id = change.doc.id;
+            
+            if (change.type === "added") {
+                const card = createChatCard(id, data);
+                els.chatList.appendChild(card);
+            }
+            
+            if (change.type === "modified") {
+                const existingCard = document.getElementById(`chat-card-${id}`);
+                if (existingCard) {
+                    updateChatCardContent(existingCard, data);
+                    
+                    // Move to top if new message
+                    if (change.newIndex === 0) {
+                        els.chatList.prepend(existingCard);
+                    }
+                }
+            }
+        });
+    });
+}
+```
+
+### New Message Notifications
+
+Play sound and show visual indicator:
+
+```javascript
+if ((change.type === "added" || change.type === "modified") && source === "Server") {
+    if (data.unread && data.lastMessageAt) {
+        const messageAge = Date.now() - data.lastMessageAt.toDate();
+        
+        if (messageAge < 10000) { // Less than 10 seconds old
+            if (document.hidden || activeChatId !== id) {
+                playSound();
+                document.title = "🔔 Nuevo Mensaje!";
+                setTimeout(() => document.title = "WhatsApp CRM", 4000);
+            }
+        }
+    }
+}
+```
+
+<Tip>
+  Sound only plays for new messages when the admin is on a different chat or has the tab inactive.
+</Tip>
+
+### Chat Search
+
+Search by phone number or customer name:
+
+```javascript
+els.chatSearchInput.oninput = async (e) => {
+    const term = e.target.value.toLowerCase().trim();
+    
+    if (!term) {
+        initChatList(); // Return to real-time mode
+        return;
+    }
+    
+    // Pause real-time updates during search
+    if (chatSearchTimeout) clearTimeout(chatSearchTimeout);
+    
+    chatSearchTimeout = setTimeout(async () => {
+        // Direct phone lookup
+        if (!isNaN(term) && term.length > 5) {
+            const docSnap = await getDoc(doc(db, "chats", term));
+            const docSnap57 = await getDoc(doc(db, "chats", "57" + term));
+            
+            els.chatList.innerHTML = "";
+            if (docSnap.exists()) els.chatList.appendChild(createChatCard(docSnap.id, docSnap.data()));
+            if (docSnap57.exists()) els.chatList.appendChild(createChatCard(docSnap57.id, docSnap57.data()));
+        } else {
+            // Name search
+            const termCap = term.charAt(0).toUpperCase() + term.slice(1);
+            const q = query(
+                collection(db, "chats"),
+                orderBy('clientName'),
+                startAt(termCap),
+                endAt(termCap + '\uf8ff'),
+                limit(10)
+            );
+            
+            const snap = await getDocs(q);
+            els.chatList.innerHTML = "";
+            snap.forEach(d => {
+                els.chatList.appendChild(createChatCard(d.id, d.data()));
+            });
+        }
+    }, 600);
+};
+```
+
+## Message Area
+
+### Conversation Loading
+
+Paginated message history with real-time updates:
+
+```javascript
+function loadMessages(chatId) {
+    // Query: Last 20 messages
+    const q = query(
+        collection(db, "chats", chatId, "messages"),
+        orderBy("timestamp", "asc"),
+        limitToLast(20)
+    );
+    
+    unsubscribeMessages = onSnapshot(q, (snapshot) => {
+        const liveContainer = document.getElementById('live-messages-container');
+        
+        // Save scroll position
+        const isAtBottom = els.msgArea.scrollHeight - els.msgArea.scrollTop - els.msgArea.clientHeight < 100;
+        
+        snapshot.docChanges().forEach(change => {
+            const data = change.doc.data();
+            const msgId = change.doc.id;
+            
+            if (change.type === "added") {
+                const node = createMessageNode(data);
+                node.id = `msg-${msgId}`;
+                liveContainer.appendChild(node);
+            }
+            
+            if (change.type === "modified") {
+                const existing = document.getElementById(`msg-${msgId}`);
+                if (existing) {
+                    const newNode = createMessageNode(data);
+                    newNode.id = `msg-${msgId}`;
+                    liveContainer.replaceChild(newNode, existing);
+                }
+            }
+        });
+        
+        // Auto-scroll if user was at bottom
+        if (isAtBottom || snapshot.metadata.fromCache) {
+            setTimeout(() => {
+                els.msgArea.scrollTo({ top: els.msgArea.scrollHeight, behavior: 'smooth' });
+            }, 100);
+        }
+    });
+}
+```
+
+### Load Older Messages
+
+Infinite scroll pagination:
+
+```javascript
+async function loadOlderMessages() {
+    const previousHeight = els.msgArea.scrollHeight;
+    const previousScroll = els.msgArea.scrollTop;
+    
+    const q = query(
+        collection(db, "chats", activeChatId, "messages"),
+        orderBy("timestamp", "desc"),
+        startAfter(oldestMessageDoc),
+        limit(20)
+    );
+    
+    const snap = await getDocs(q);
+    if (snap.empty) {
+        btnWrapper.innerHTML = `<span class="text-gray-400">Inicio de la conversación</span>`;
+        return;
+    }
+    
+    oldestMessageDoc = snap.docs[snap.docs.length - 1];
+    
+    // Insert at top
+    const fragment = document.createDocumentFragment();
+    snap.docs.reverse().forEach(doc => {
+        fragment.appendChild(createMessageNode(doc.data()));
+    });
+    historyContainer.prepend(fragment);
+    
+    // Maintain scroll position
+    const newHeight = els.msgArea.scrollHeight;
+    els.msgArea.scrollTop = newHeight - previousHeight + previousScroll;
+}
+```
+
+## Quick Replies and Templates
+
+Pre-configured responses for common questions:
+
+### Template System
+
+```javascript
+const QUICK_REPLIES = [
+    { 
+        title: "👋 Saludo", 
+        text: "¡Hola! Gracias por escribir a PixelTech. ¿En qué podemos ayudarte hoy?" 
+    },
+    { 
+        title: "🛵 Envío Bogotá", 
+        text: "Para Bogotá el envío llega el mismo día (Lunes a Sábado) si confirmas antes de las 2:30 PM.\n\n💰 Costo: $10.000\n🤝 Pago: Contra entrega." 
+    },
+    { 
+        title: "🚚 Envío Nacional", 
+        text: "Realizamos envíos a toda Colombia 🇨🇴. Si confirmas antes de las 2:30 PM sale hoy mismo.\n\n📸 Te enviamos foto del paquete y la guía de rastreo.\n💰 Costo promedio: $18.000 (varía según ubicación)." 
+    },
+    {
+        title: "📝 Pedir Datos",
+        text: "Para procesar tu pedido, regálame por favor estos datos:\n\n🧑🏻 Nombre:\n🎫 C.C:\n📲 Cel:\n🏠 Dirección:\n🏭 Barrio:\n🌆 Ciudad:"
+    },
+    {
+        title: "🛡️ Garantía",
+        text: "Todos nuestros productos tienen *1 mes de garantía* por defectos de fábrica.\n\nNota: Los defectos de fábrica usualmente se muestran inmediatamente o durante la primera semana."
+    }
+];
+```
+
+### Slash Command Activation
+
+```javascript
+els.txtInput.addEventListener('input', (e) => {
+    const val = e.target.value;
+    
+    if (val.startsWith('/')) {
+        const filter = val.substring(1).toLowerCase();
+        renderQuickReplies(filter);
+        els.quickReplyMenu.classList.remove('hidden');
+    } else {
+        els.quickReplyMenu.classList.add('hidden');
+    }
+});
+
+function renderQuickReplies(filter) {
+    const filtered = QUICK_REPLIES.filter(r => 
+        r.title.toLowerCase().includes(filter) || 
+        r.text.toLowerCase().includes(filter)
+    );
+    
+    filtered.forEach(r => {
+        const div = document.createElement('div');
+        div.className = "p-3 hover:bg-slate-50 cursor-pointer";
+        div.innerHTML = `
+            <p class="text-[10px] font-black uppercase text-brand-cyan">${r.title}</p>
+            <p class="text-xs text-gray-600">${r.text}</p>
+        `;
+        div.onclick = () => {
+            els.txtInput.value = r.text;
+            els.quickReplyMenu.classList.add('hidden');
+            els.txtInput.focus();
+        };
+        els.quickReplyList.appendChild(div);
+    });
+}
+```
+
+<Info>
+  Type `/` to open quick replies. Start typing to filter (e.g., `/envio` shows shipping templates).
+</Info>
+
+## Product Sharing
+
+### Smart Product Cache
+
+Products are cached in `localStorage` for instant search:
+
+```javascript
+function initSmartProductList() {
+    const STORAGE_KEY = 'pixeltech_admin_quick_catalog';
+    
+    // 1. Load from cache instantly
+    const cachedRaw = localStorage.getItem(STORAGE_KEY);
+    if (cachedRaw) {
+        const parsed = JSON.parse(cachedRaw);
+        chatProductsCache = Object.values(parsed.map);
+        renderProductList(chatProductsCache.slice(0, 20));
+    }
+    
+    // 2. Listen for real-time updates
+    const q = lastSyncTime === 0 
+        ? query(collection(db, "products"))
+        : query(collection(db, "products"), where("updatedAt", ">", new Date(lastSyncTime)));
+    
+    unsubscribeChatProducts = onSnapshot(q, (snapshot) => {
+        snapshot.docChanges().forEach(change => {
+            const data = change.doc.data();
+            runtimeMap[change.doc.id] = { id: change.doc.id, ...data };
+        });
+        
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({
+            map: runtimeMap,
+            lastSync: Date.now()
+        }));
+        
+        chatProductsCache = Object.values(runtimeMap);
+        renderProductList(chatProductsCache.slice(0, 20));
+    });
+}
+```
+
+### In-Memory Search
+
+```javascript
+els.prodSearch.oninput = (e) => {
+    const term = normalizeText(e.target.value);
+    
+    if (term.length === 0) {
+        renderProductList(chatProductsCache.slice(0, 20));
+        return;
+    }
+    
+    // Search in RAM (zero Firebase reads)
+    const results = chatProductsCache.filter(p => {
+        const nameMatch = normalizeText(p.name).includes(term);
+        const catMatch = normalizeText(p.category).includes(term);
+        const subMatch = normalizeText(p.subcategory).includes(term);
+        return nameMatch || catMatch || subMatch;
+    });
+    
+    renderProductList(results.slice(0, 20));
+};
+```
+
+### Send Product via WhatsApp
+
+```javascript
+async function sendProduct(product) {
+    const price = (product.price || 0).toLocaleString('es-CO');
+    const isVariable = !product.isSimple;
+    const priceText = isVariable ? `Desde $${price}` : `$${price}`;
+    
+    let featuresText = "";
+    if (product.definedColors?.length > 0) {
+        featuresText += `\n🎨 *Colores:* ${product.definedColors.join(', ')}`;
+    }
+    if (product.definedCapacities?.length > 0) {
+        featuresText += `\n💾 *Capacidad:* ${product.definedCapacities.join(', ')}`;
+    }
+    
+    let warrantyText = "";
+    if (product.warranty?.time > 0) {
+        const unit = TIME_UNITS[product.warranty.unit] || product.warranty.unit;
+        warrantyText = `\n🛡️ *Garantía:* ${product.warranty.time} ${unit} (Directa)`;
+    }
+    
+    const caption = `*${product.name}*\n💲 *Precio:* ${priceText}${featuresText}${warrantyText}`.trim();
+    const imgUrl = product.mainImage || product.image || product.images?.[0];
+    
+    const sendFn = httpsCallable(functions, 'sendWhatsappMessage');
+    await sendFn({ 
+        phoneNumber: activeChatId, 
+        message: caption, 
+        type: 'image',
+        mediaUrl: imgUrl
+    });
+}
+```
+
+<Tip>
+  Product cards automatically show warranty, colors, capacities, and stock status.
+</Tip>
+
+## Order Creation from Chat
+
+### Quick Order Flow
+
+```javascript
+els.btnActSale.onclick = async () => {
+    if (!activeChatId) return;
+    
+    const cleanPhone = activeChatId.replace(/^57/, '');
+    
+    // Check if customer exists
+    const q = query(
+        collection(db, "users"),
+        where("phone", "==", cleanPhone),
+        limit(1)
+    );
+    const snap = await getDocs(q);
+    
+    // Open manual sale modal
+    await openManualSaleModal();
+    
+    // Pre-fill customer data
+    if (!snap.empty) {
+        const customer = snap.docs[0].data();
+        document.getElementById('m-cust-search').value = customer.name;
+        document.getElementById('m-cust-phone').value = customer.phone;
+    } else {
+        document.getElementById('m-cust-phone').value = cleanPhone;
+    }
+};
+```
+
+## Customer Service Workflow
+
+### 24-Hour Session Window
+
+WhatsApp Business API has a 24-hour messaging window:
+
+```javascript
+function startSessionTimer(lastCustomerInteraction) {
+    if (timerInterval) clearInterval(timerInterval);
+    
+    const check = () => {
+        if (!lastCustomerInteraction) {
+            updateTimer(0, false, "Esperando...");
+            return;
+        }
+        
+        const elapsed = new Date() - lastCustomerInteraction.toDate();
+        const remaining = (24 * 60 * 60 * 1000) - elapsed;
+        
+        if (remaining <= 0) {
+            updateTimer(0, false, "Expirado");
+            clearInterval(timerInterval);
+        } else {
+            updateTimer(remaining, true);
+        }
+    };
+    
+    check();
+    timerInterval = setInterval(check, 1000);
+}
+
+function updateTimer(ms, open, txt) {
+    els.timerBadge.className = open 
+        ? 'bg-emerald-100 text-emerald-700' 
+        : 'bg-red-100 text-red-700';
+    
+    els.timerText.textContent = open 
+        ? `${Math.floor(ms/3600000)}h ${Math.floor((ms%3600000)/60000)}m` 
+        : txt;
+    
+    // Disable input when session expires
+    els.txtInput.disabled = !open;
+    els.btnAttach.disabled = !open;
+    els.btnProducts.disabled = !open;
+    els.btnSend.disabled = !open;
+}
+```
+
+<Warning>
+  After 24 hours without customer interaction, you can only send template messages (not supported in this UI).
+</Warning>
+
+### Resolve Chat
+
+Move conversation to resolved tab:
+
+```javascript
+els.btnResolve.onclick = async () => {
+    if (!activeChatId) return;
+    
+    const isResolved = els.btnResolve.innerText.includes('Reabrir');
+    const newStatus = isResolved ? 'open' : 'resolved';
+    
+    await updateDoc(doc(db, "chats", activeChatId), { 
+        status: newStatus,
+        resolvedAt: newStatus === 'resolved' ? new Date() : null
+    });
+    
+    if (currentTab === 'open' && newStatus === 'resolved') {
+        activeChatId = null;
+        els.conversationPanel.classList.add('translate-x-full');
+    }
+};
+```
+
+## Media Support
+
+### Send Images
+
+```javascript
+els.btnAttach.onclick = () => els.fileInput.click();
+
+els.fileInput.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file || !activeChatId) return;
+    
+    const storageRef = ref(
+        storage, 
+        `chats/${activeChatId}/uploads/${Date.now()}_${file.name}`
+    );
+    
+    await uploadBytes(storageRef, file);
+    const url = await getDownloadURL(storageRef);
+    
+    const sendFn = httpsCallable(functions, 'sendWhatsappMessage');
+    await sendFn({ 
+        phoneNumber: activeChatId, 
+        message: "", 
+        type: 'image', 
+        mediaUrl: url 
+    });
+};
+```
+
+### Display Media
+
+```javascript
+function createMessageNode(message) {
+    let contentHtml = "";
+    
+    if (message.messageType === 'text') {
+        contentHtml = `<p class="whitespace-pre-wrap">${message.content}</p>`;
+    } else if (message.messageType === 'image' && message.mediaUrl) {
+        contentHtml = `
+            <a href="${message.mediaUrl}" target="_blank">
+                <img src="${message.mediaUrl}" class="rounded-lg max-w-xs max-h-64 object-cover">
+            </a>
+            ${message.content ? `<p class="mt-1">${message.content}</p>` : ''}
+        `;
+    } else if (message.messageType === 'audio' && message.mediaUrl) {
+        contentHtml = `<audio controls><source src="${message.mediaUrl}"></audio>`;
+    }
+    
+    const div = document.createElement('div');
+    div.className = `flex ${message.type === 'incoming' ? 'justify-start' : 'justify-end'}`;
+    div.innerHTML = `
+        <div class="max-w-[75%] p-3 ${message.type === 'incoming' ? 'chat-bubble-in' : 'chat-bubble-out'}">
+            ${contentHtml}
+        </div>
+    `;
+    return div;
+}
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Response Time" icon="clock">
+    - Reply within 5 minutes during business hours
+    - Use quick replies for common questions
+    - Monitor unread badge count
+  </Card>
+  
+  <Card title="Personalization" icon="user">
+    - Address customers by name
+    - Reference their order history
+    - Remember preferences from past chats
+  </Card>
+  
+  <Card title="Product Sharing" icon="box">
+    - Send product cards instead of manual typing
+    - Include warranty information
+    - Mention available colors/capacities
+  </Card>
+  
+  <Card title="Order Conversion" icon="cart-shopping">
+    - Ask for shipping details during chat
+    - Create orders directly from conversation
+    - Send payment instructions immediately
+  </Card>
+</CardGroup>

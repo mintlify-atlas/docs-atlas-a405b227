@@ -1,0 +1,428 @@
+---
+title: 'Email Notifications'
+description: 'Automated email functions for order confirmations and shipping updates'
+icon: 'envelope'
+---
+
+## Overview
+
+PixelTech uses Firebase Cloud Functions with Nodemailer to send transactional emails. Two main triggers send emails when orders are created and when shipping details are added.
+
+## Configuration
+
+SMTP transport is configured using environment variables.
+
+**From `emails.js:5-13`:**
+
+```javascript
+const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: parseInt(process.env.SMTP_PORT) || 465,
+    secure: true,
+    auth: {
+        user: process.env.SMTP_EMAIL,
+        pass: process.env.SMTP_PASSWORD
+    }
+});
+```
+
+### Environment Variables
+
+<ParamField path="SMTP_HOST" type="string" required>
+  SMTP server hostname (e.g., `smtp.gmail.com`)
+</ParamField>
+
+<ParamField path="SMTP_PORT" type="number" default="465">
+  SMTP port (465 for SSL, 587 for TLS)
+</ParamField>
+
+<ParamField path="SMTP_EMAIL" type="string" required>
+  Sender email address
+</ParamField>
+
+<ParamField path="SMTP_PASSWORD" type="string" required>
+  SMTP authentication password or app-specific password
+</ParamField>
+
+## Email Functions
+
+### sendOrderConfirmation
+
+Sends order confirmation email when a new order is created.
+
+**Location**: `emails.js:222-252`
+
+**Trigger**: Firestore document created in `orders/{orderId}`
+
+**Function Signature**:
+```javascript
+exports.sendOrderConfirmation = onDocumentCreated("orders/{orderId}", async (event) => {
+    const orderData = event.data.data();
+    const orderId = event.params.orderId;
+    // ...
+});
+```
+
+**Email Details**:
+- **From**: `"PixelTech Pedidos" <notifications@pixeltechcol.com>`
+- **Subject**: `¡Recibimos tu pedido! #ABC12345 🎉`
+- **Template**: Order summary with items, pricing, and customer info
+
+**Implementation**:
+```javascript
+const email = orderData.buyerInfo?.email || orderData.extraData?.billingData?.email;
+
+if (!email) {
+    console.log(`Orden ${orderId} sin email. Omisión.`);
+    return;
+}
+
+const htmlContent = getBeautifulEmailTemplate('CONFIRMATION', orderData, orderId);
+
+const mailOptions = {
+    from: `"PixelTech Pedidos" <${process.env.SMTP_EMAIL}>`,
+    to: email,
+    subject: `¡Recibimos tu pedido! #${orderId.slice(0,8).toUpperCase()} 🎉`,
+    html: htmlContent
+};
+
+await transporter.sendMail(mailOptions);
+await event.data.ref.update({ confirmationEmailSent: true });
+```
+
+### sendDispatchNotification
+
+Sends shipping notification when order status changes to dispatched or tracking number is added.
+
+**Location**: `emails.js:255-288`
+
+**Trigger**: Firestore document updated in `orders/{orderId}`
+
+**Function Signature**:
+```javascript
+exports.sendDispatchNotification = onDocumentUpdated("orders/{orderId}", async (event) => {
+    const newData = event.data.after.data();
+    const previousData = event.data.before.data();
+    // ...
+});
+```
+
+**Trigger Conditions**:
+```javascript
+const isDispatched = (
+    newData.status === 'dispatched' || 
+    newData.status === 'enviado' || 
+    newData.status === 'DESPACHADO' || 
+    newData.status === 'EN_RUTA'
+) && previousData.status !== newData.status;
+
+const trackingAdded = newData.trackingNumber && !previousData.trackingNumber;
+
+if (isDispatched || trackingAdded) {
+    // Send dispatch email
+}
+```
+
+**Email Details**:
+- **From**: `"PixelTech Envíos" <notifications@pixeltechcol.com>`
+- **Subject**: `¡Tu pedido va en camino! 🚚 #ABC12345`
+- **Template**: Includes tracking number and carrier information
+
+## Email Templates
+
+### Template System
+
+The `getBeautifulEmailTemplate()` function generates responsive HTML emails.
+
+**From `emails.js:36-219`:**
+
+```javascript
+function getBeautifulEmailTemplate(type, order, orderId) {
+    const isDispatch = type === 'DISPATCH';
+    const primaryColor = "#00D6D6"; // Brand Cyan
+    const darkColor = "#1e293b";    // Slate-900
+    
+    // Generate items list
+    const itemsHtml = (order.items || []).map(item => `
+        <tr>
+            <td>
+                <img src="${item.mainImage}" style="width: 60px; height: 60px;">
+                <p>${item.name}</p>
+                <p>${item.color} | Cant: ${item.quantity}</p>
+            </td>
+            <td>${formatMoney(item.price * item.quantity)}</td>
+        </tr>
+    `).join('');
+    
+    return `<!DOCTYPE html>...</html>`;
+}
+```
+
+### Template Features
+
+<CardGroup cols={2}>
+  <Card title="Responsive Design" icon="mobile-screen">
+    Mobile-optimized layout with proper viewport meta tags
+  </Card>
+  <Card title="Brand Consistency" icon="palette">
+    Uses PixelTech brand colors (#00D6D6 cyan, #1e293b dark)
+  </Card>
+  <Card title="Order Summary" icon="list">
+    Product images, names, quantities, and pricing breakdown
+  </Card>
+  <Card title="Tracking Links" icon="truck">
+    Direct links to carrier tracking pages when available
+  </Card>
+</CardGroup>
+
+### Tracking Link Generation
+
+**From `emails.js:25-33`:**
+
+```javascript
+const getTrackingLink = (carrier, guide) => {
+    if (!carrier || !guide) return "#";
+    const c = carrier.toLowerCase();
+    
+    if (c.includes('servientrega')) 
+        return "https://www.servientrega.com/wps/portal/rastreo-envio";
+    if (c.includes('interrapidisimo')) 
+        return "https://interrapidisimo.com/sigue-tu-envio/";
+    if (c.includes('coordinadora')) 
+        return "https://coordinadora.com/rastreo/rastreo-de-guia/";
+    
+    return `https://www.google.com/search?q=${carrier}+rastreo`;
+};
+```
+
+### WhatsApp Contact Link
+
+Emails include a pre-filled WhatsApp link for customer support.
+
+**From `emails.js:73-79`:**
+
+```javascript
+const customerName = order.buyerInfo?.name || 'Cliente';
+const cleanOrderId = orderId.slice(0, 8).toUpperCase();
+const waMessage = `Hola PixelTech, tengo una duda sobre mi pedido #${cleanOrderId} a nombre de ${customerName}.`;
+const waLink = `https://wa.me/573229243907?text=${encodeURIComponent(waMessage)}`;
+```
+
+Rendered in footer:
+```html
+<p>
+    ¿Tienes dudas? 
+    <a href="{waLink}" style="color: #00D6D6; font-weight: bold;">
+        Contáctanos por WhatsApp
+    </a>
+</p>
+```
+
+## Email Template Structure
+
+### Confirmation Email
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+    </style>
+</head>
+<body style="font-family: 'Inter', sans-serif; background-color: #f8fafc;">
+    <table width="100%">
+        <tr>
+            <td align="center">
+                <!-- Header: Dark background with logo and title -->
+                <td style="background-color: #1e293b; padding: 40px;">
+                    <img src="https://pixeltechcol.firebaseapp.com/img/logo.png" height="40px">
+                    <h1 style="color: #ffffff;">¡Gracias por tu compra! 🎉</h1>
+                    <p style="color: #94a3b8;">Orden #ABC12345</p>
+                </td>
+                
+                <!-- Body: Order summary -->
+                <td style="padding: 40px;">
+                    <p>Hola <strong>Juan Pérez</strong>,</p>
+                    <p>Hemos recibido tu pedido correctamente...</p>
+                    
+                    <!-- Items table -->
+                    <table width="100%">
+                        <tr>
+                            <td>iPhone 14 Pro - Negro - 256GB</td>
+                            <td>$4,500,000</td>
+                        </tr>
+                    </table>
+                    
+                    <!-- Totals -->
+                    <table>
+                        <tr>
+                            <td>Envío</td>
+                            <td>$15,000</td>
+                        </tr>
+                        <tr>
+                            <td>Total Pagado</td>
+                            <td>$4,515,000</td>
+                        </tr>
+                    </table>
+                    
+                    <!-- Address box -->
+                    <div style="background-color: #f8fafc; padding: 20px;">
+                        <p>Dirección de Envío</p>
+                        <p>Calle 123 #45-67</p>
+                        <p>Bogotá</p>
+                    </div>
+                    
+                    <!-- CTA Button -->
+                    <a href="https://pixeltechcol.com/shop/order-detail.html?id={orderId}"
+                       style="background-color: #1e293b; color: #fff; padding: 15px 30px;">
+                        Ver Detalles en la Web
+                    </a>
+                </td>
+                
+                <!-- Footer -->
+                <td style="background-color: #f1f5f9; padding: 20px;">
+                    <p>&copy; 2026 PixelTech Colombia.</p>
+                    <p>¿Tienes dudas? <a href="{waLink}">Contáctanos</a></p>
+                </td>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
+```
+
+### Dispatch Email
+
+Same structure as confirmation, but includes:
+
+```html
+<!-- Tracking box (if trackingNumber exists) -->
+<div style="background-color: #ecfeff; border: 1px solid #cfFAFE; padding: 20px;">
+    <p>Número de Guía (Servientrega)</p>
+    <p style="font-size: 24px; font-family: monospace;">1234567890</p>
+    <a href="https://servientrega.com/rastreo" 
+       style="background-color: #00D6D6; color: #000; padding: 10px 20px;">
+        Rastrear Pedido
+    </a>
+</div>
+```
+
+## Helper Functions
+
+### Format Currency
+
+**From `emails.js:16-22`:**
+
+```javascript
+const formatMoney = (amount) => {
+    return new Intl.NumberFormat('es-CO', { 
+        style: 'currency', 
+        currency: 'COP', 
+        minimumFractionDigits: 0 
+    }).format(amount || 0);
+};
+```
+
+**Output**: `$4.515.000` (Colombian format)
+
+## Email Tracking
+
+Orders are updated with email status flags:
+
+```javascript
+// After sending confirmation
+await event.data.ref.update({ confirmationEmailSent: true });
+
+// After sending dispatch notification
+await event.data.after.ref.update({ dispatchEmailSent: true });
+```
+
+## Error Handling
+
+Email failures are logged but don't block order processing:
+
+```javascript
+try {
+    await transporter.sendMail(mailOptions);
+    console.log(`Email CONFIRMACION enviado a ${email}`);
+} catch (error) {
+    console.error('Error enviando email:', error);
+    return; // Don't throw - order is still valid
+}
+```
+
+## Testing Emails
+
+### Local Testing with Gmail
+
+1. Enable 2-factor authentication on Gmail account
+2. Generate an app-specific password
+3. Set environment variables:
+
+```bash
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=465
+SMTP_EMAIL=your-email@gmail.com
+SMTP_PASSWORD=your-app-password
+```
+
+### Test Email Trigger
+
+Create a test order in Firestore to trigger confirmation email:
+
+```javascript
+await db.collection('orders').add({
+    buyerInfo: { email: 'test@example.com', name: 'Test User' },
+    items: [{ name: 'Test Product', price: 100000, quantity: 1 }],
+    total: 100000,
+    shippingData: { address: 'Test Address', city: 'Bogotá' }
+});
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Always Check for Email">
+    Validate email exists before attempting to send
+  </Step>
+  <Step title="Use Transactional Email Service">
+    For production, use SendGrid, Mailgun, or AWS SES for better deliverability
+  </Step>
+  <Step title="Include Unsubscribe Link">
+    For marketing emails (not required for transactional emails)
+  </Step>
+  <Step title="Test on Multiple Clients">
+    Preview emails in Gmail, Outlook, Apple Mail, and mobile devices
+  </Step>
+  <Step title="Monitor Bounce Rates">
+    Track failed deliveries and update customer email addresses
+  </Step>
+</Steps>
+
+## Email Deliverability
+
+### SPF Record
+
+Add SPF record to DNS:
+```
+v=spf1 include:_spf.google.com ~all
+```
+
+### DKIM Signing
+
+Configure DKIM in your SMTP provider for authentication.
+
+### DMARC Policy
+
+Set DMARC policy:
+```
+v=DMARC1; p=none; rua=mailto:admin@pixeltechcol.com
+```
+
+## Related Documentation
+
+- [Order Functions](/api/orders)
+- [Payment Functions](/api/payments)
+- [Collections: Orders](/api/collections/orders)
