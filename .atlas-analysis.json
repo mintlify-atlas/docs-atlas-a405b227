@@ -1,0 +1,143 @@
+{
+  "projectType": "saas",
+  "projectName": "PixelTech Colombia",
+  "projectDescription": "Full-stack e-commerce platform for technology retail with inventory management, multi-payment integration, and WhatsApp customer service",
+  "theme": "mint",
+  "primaryColor": "#00AEC7",
+  "lightColor": "#00D4F0",
+  "darkColor": "#008FA3",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Platform",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Customer Features",
+            "pages": [
+              "features/catalog",
+              "features/cart-checkout",
+              "features/user-accounts",
+              "features/order-tracking"
+            ]
+          },
+          {
+            "group": "Admin Dashboard",
+            "pages": [
+              "admin/overview",
+              "admin/inventory",
+              "admin/orders",
+              "admin/customers",
+              "admin/whatsapp",
+              "admin/accounting"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/payment-gateways",
+              "integrations/mercadopago",
+              "integrations/addi",
+              "integrations/sistecredito",
+              "integrations/whatsapp-api"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Development",
+        "groups": [
+          {
+            "group": "Setup",
+            "pages": [
+              "development/environment",
+              "development/firebase-setup",
+              "development/deployment"
+            ]
+          },
+          {
+            "group": "Backend",
+            "pages": [
+              "backend/cloud-functions",
+              "backend/firestore-schema",
+              "backend/security-rules",
+              "backend/webhooks"
+            ]
+          },
+          {
+            "group": "Frontend",
+            "pages": [
+              "frontend/smart-sync",
+              "frontend/components",
+              "frontend/styling"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Cloud Functions",
+            "pages": [
+              "api/payments",
+              "api/orders",
+              "api/emails",
+              "api/scheduler"
+            ]
+          },
+          {
+            "group": "Firestore Collections",
+            "pages": [
+              "api/collections/products",
+              "api/collections/orders",
+              "api/collections/users",
+              "api/collections/chats"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Real-time smart product catalog with offline-first caching",
+    "Multi-payment gateway integration (MercadoPago, ADDI, Sistecrédito, COD)",
+    "WhatsApp business integration for customer service",
+    "Comprehensive admin dashboard for inventory and order management",
+    "Firebase-powered backend with Firestore and Cloud Functions",
+    "Client account management with order history and saved addresses",
+    "Advanced accounting module with expense tracking and accounts receivable",
+    "Warranty management system",
+    "Google Merchant Center integration for product feeds",
+    "Manual sales and invoice generation",
+    "Automated email notifications for orders and shipping",
+    "Real-time stock synchronization across all channels"
+  ],
+  "publicApiSurface": [
+    "createMercadoPagoPreference",
+    "mercadoPagoWebhook",
+    "createCODOrder",
+    "createAddiCheckout",
+    "addiWebhook",
+    "createSistecreditoCheckout",
+    "sistecreditoWebhook",
+    "sendOrderConfirmation",
+    "sendDispatchNotification",
+    "cleanupOldOrders",
+    "processScheduledTransfers",
+    "cancelAbandonedPayments",
+    "checkExpiredPromotions",
+    "whatsappWebhook",
+    "sendWhatsappMessage",
+    "touchProductTimestamp",
+    "generateProductFeed",
+    "sitemap"
+  ]
+}
