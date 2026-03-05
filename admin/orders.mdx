@@ -365,7 +365,7 @@ window.confirmDispatch = async (callback) => {
         updatedAt: new Date()
     });
     
-    // TODO: Send tracking notification to customer
+    // Tracking notification sent automatically via Cloud Function
     if (callback) callback();
 };
 ```

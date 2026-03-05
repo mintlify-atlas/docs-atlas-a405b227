@@ -65,7 +65,7 @@ The platform uses five core Firebase services working together:
 
 **Collections Structure**:
 
-```
+```text
 firestore
 ├── products/              # Product catalog
 │   ├── {productId}
@@ -88,7 +88,7 @@ firestore
 ├── payables/             # Accounts payable
 └── chats/                # WhatsApp conversations
     └── messages/         # Chat messages (subcollection)
-```
+```text
 
 **Data Model Examples**:
 
@@ -123,7 +123,7 @@ firestore
   "updatedAt": Timestamp,
   "last_updated": Timestamp // Auto-updated by Cloud Function
 }
-```
+```text
 
 ```javascript Order Document
 // orders/{orderId}
@@ -165,7 +165,7 @@ firestore
   "createdAt": Timestamp,
   "updatedAt": Timestamp
 }
-```
+```text
 
 ```javascript Config Document
 // config/system
@@ -181,7 +181,6 @@ firestore
   "whatsappNumber": "+573001234567",
   "maintenanceMode": false
 }
-```
 </CodeGroup>
 
 ### 3. Cloud Storage
@@ -189,7 +188,7 @@ firestore
 **Purpose**: Store product images, warranties, invoices, and chat attachments
 
 **Storage Structure**:
-```
+```text
 storage
 ├── products/           # Product images
 │   └── {productId}/
@@ -203,7 +202,7 @@ storage
 ├── categories/         # Category images
 ├── brands/             # Brand logos
 └── chats/              # WhatsApp attachments
-```
+```text
 
 **Security Rules**: Public read for products/banners, authenticated write for all uploads.
 
@@ -213,7 +212,6 @@ storage
 
 **Function Architecture** (from `functions/index.js`):
 
-<CodeGroup>
 ```javascript Payment Functions
 // MercadoPago Integration
 exports.createMercadoPagoPreference = functions.https.onCall(...);
@@ -259,7 +257,6 @@ exports.generateProductFeed = merchantModule.generateProductFeed;
 // Dynamic sitemap generation
 exports.sitemap = sitemapModule.sitemap;
 ```
-</CodeGroup>
 
 **Key Function Modules**:
 
